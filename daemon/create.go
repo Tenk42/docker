@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/types"
@@ -13,6 +14,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer/label"
 )
 
+// ContainerCreate takes configs and creates a container.
 func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hostConfig *runconfig.HostConfig, adjustCPUShares bool) (*Container, []string, error) {
 	if config == nil {
 		return nil, nil, fmt.Errorf("Config cannot be empty in order to create a container")
@@ -27,11 +29,14 @@ func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hos
 	container, buildWarnings, err := daemon.Create(config, hostConfig, name)
 	if err != nil {
 		if daemon.Graph().IsNotExist(err, config.Image) {
-			_, tag := parsers.ParseRepositoryTag(config.Image)
+			if strings.Contains(config.Image, "@") {
+				return nil, warnings, fmt.Errorf("No such image: %s", config.Image)
+			}
+			img, tag := parsers.ParseRepositoryTag(config.Image)
 			if tag == "" {
 				tag = tags.DefaultTag
 			}
-			return nil, warnings, fmt.Errorf("No such image: %s (tag: %s)", config.Image, tag)
+			return nil, warnings, fmt.Errorf("No such image: %s:%s", img, tag)
 		}
 		return nil, warnings, err
 	}
@@ -70,7 +75,7 @@ func (daemon *Daemon) Create(config *runconfig.Config, hostConfig *runconfig.Hos
 		hostConfig = &runconfig.HostConfig{}
 	}
 	if hostConfig.SecurityOpt == nil {
-		hostConfig.SecurityOpt, err = daemon.GenerateSecurityOpt(hostConfig.IpcMode, hostConfig.PidMode)
+		hostConfig.SecurityOpt, err = daemon.generateSecurityOpt(hostConfig.IpcMode, hostConfig.PidMode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -104,15 +109,15 @@ func (daemon *Daemon) Create(config *runconfig.Config, hostConfig *runconfig.Hos
 		return nil, nil, err
 	}
 
-	if err := container.ToDisk(); err != nil {
+	if err := container.toDiskLocking(); err != nil {
 		logrus.Errorf("Error saving new container to disk: %v", err)
 		return nil, nil, err
 	}
-	container.LogEvent("create")
+	container.logEvent("create")
 	return container, warnings, nil
 }
 
-func (daemon *Daemon) GenerateSecurityOpt(ipcMode runconfig.IpcMode, pidMode runconfig.PidMode) ([]string, error) {
+func (daemon *Daemon) generateSecurityOpt(ipcMode runconfig.IpcMode, pidMode runconfig.PidMode) ([]string, error) {
 	if ipcMode.IsHost() || pidMode.IsHost() {
 		return label.DisableSecOpt(), nil
 	}

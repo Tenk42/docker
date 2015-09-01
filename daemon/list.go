@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/graphdb"
 	"github.com/docker/docker/pkg/nat"
 	"github.com/docker/docker/pkg/parsers/filters"
@@ -17,24 +19,35 @@ func (daemon *Daemon) List() []*Container {
 	return daemon.containers.List()
 }
 
+// ContainersConfig is a struct for configuring the command to list
+// containers.
 type ContainersConfig struct {
-	All     bool
-	Since   string
-	Before  string
-	Limit   int
-	Size    bool
+	// if true show all containers, otherwise only running containers.
+	All bool
+	// show all containers created after this container id
+	Since string
+	// show all containers created before this container id
+	Before string
+	// number of containers to return at most
+	Limit int
+	// if true include the sizes of the containers
+	Size bool
+	// return only containers that match filters
 	Filters string
 }
 
+// Containers returns a list of all the containers.
 func (daemon *Daemon) Containers(config *ContainersConfig) ([]*types.Container, error) {
 	var (
-		foundBefore bool
-		displayed   int
-		all         = config.All
-		n           = config.Limit
-		psFilters   filters.Args
-		filtExited  []int
+		foundBefore    bool
+		displayed      int
+		ancestorFilter bool
+		all            = config.All
+		n              = config.Limit
+		psFilters      filters.Args
+		filtExited     []int
 	)
+	imagesFilter := map[string]bool{}
 	containers := []*types.Container{}
 
 	psFilters, err := filters.FromParam(config.Filters)
@@ -61,8 +74,29 @@ func (daemon *Daemon) Containers(config *ContainersConfig) ([]*types.Container, 
 			}
 		}
 	}
+
+	if ancestors, ok := psFilters["ancestor"]; ok {
+		ancestorFilter = true
+		byParents := daemon.Graph().ByParent()
+		// The idea is to walk the graph down the most "efficient" way.
+		for _, ancestor := range ancestors {
+			// First, get the imageId of the ancestor filter (yay)
+			image, err := daemon.Repositories().LookupImage(ancestor)
+			if err != nil {
+				logrus.Warnf("Error while looking up for image %v", ancestor)
+				continue
+			}
+			if imagesFilter[ancestor] {
+				// Already seen this ancestor, skip it
+				continue
+			}
+			// Then walk down the graph and put the imageIds in imagesFilter
+			populateImageFilterByParents(imagesFilter, image.ID, byParents)
+		}
+	}
+
 	names := map[string][]string{}
-	daemon.ContainerGraph().Walk("/", func(p string, e *graphdb.Entity) error {
+	daemon.containerGraph().Walk("/", func(p string, e *graphdb.Entity) error {
 		names[e.ID()] = append(names[e.ID()], p)
 		return nil
 	}, 1)
@@ -131,6 +165,16 @@ func (daemon *Daemon) Containers(config *ContainersConfig) ([]*types.Container, 
 		if !psFilters.Match("status", container.State.StateString()) {
 			return nil
 		}
+
+		if ancestorFilter {
+			if len(imagesFilter) == 0 {
+				return nil
+			}
+			if !imagesFilter[container.ImageID] {
+				return nil
+			}
+		}
+
 		displayed++
 		newC := &types.Container{
 			ID:    container.ID,
@@ -195,7 +239,7 @@ func (daemon *Daemon) Containers(config *ContainersConfig) ([]*types.Container, 
 		}
 
 		if config.Size {
-			sizeRw, sizeRootFs := container.GetSize()
+			sizeRw, sizeRootFs := container.getSize()
 			newC.SizeRw = sizeRw
 			newC.SizeRootFs = sizeRootFs
 		}
@@ -215,6 +259,8 @@ func (daemon *Daemon) Containers(config *ContainersConfig) ([]*types.Container, 
 	return containers, nil
 }
 
+// Volumes lists known volumes, using the filter to restrict the range
+// of volumes returned.
 func (daemon *Daemon) Volumes(filter string) ([]*types.Volume, error) {
 	var volumesOut []*types.Volume
 	volFilters, err := filters.FromParam(filter)
@@ -242,4 +288,15 @@ func (daemon *Daemon) Volumes(filter string) ([]*types.Volume, error) {
 		volumesOut = append(volumesOut, volumeToAPIType(v))
 	}
 	return volumesOut, nil
+}
+
+func populateImageFilterByParents(ancestorMap map[string]bool, imageID string, byParents map[string][]*image.Image) {
+	if !ancestorMap[imageID] {
+		if images, ok := byParents[imageID]; ok {
+			for _, image := range images {
+				populateImageFilterByParents(ancestorMap, image.ID, byParents)
+			}
+		}
+		ancestorMap[imageID] = true
+	}
 }

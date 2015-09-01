@@ -18,6 +18,7 @@ packages=(
 	builder/parser
 	builder/parser/dumper
 	cliconfig
+	daemon
 	daemon/events
 	daemon/execdriver
 	daemon/execdriver/execdrivers
@@ -44,6 +45,7 @@ packages=(
 	graph/tags
 	image
 	integration-cli
+	opts
 	pkg/archive
 	pkg/broadcastwriter
 	pkg/chrootarchive
@@ -97,6 +99,7 @@ packages=(
 	pkg/version
 	registry
 	runconfig
+	trust
 	utils
 	volume
 	volume/local

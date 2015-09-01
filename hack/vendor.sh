@@ -14,7 +14,7 @@ clone git github.com/gorilla/context 14f550f51a
 clone git github.com/gorilla/mux e444e69cbd
 clone git github.com/kr/pty 5cf931ef8f
 clone git github.com/mattn/go-sqlite3 b4142c444a8941d0d92b0b7103a24df9cd815e42
-clone git github.com/microsoft/hcsshim da093dac579302d7b413696b96dec0b5e1bce8d4
+clone git github.com/microsoft/hcsshim 7f646aa6b26bcf90caee91e93cde4a80d0d8a83e
 clone git github.com/mistifyio/go-zfs v2.1.1
 clone git github.com/tchap/go-patricia v2.1.0
 clone git golang.org/x/net 3cffabab72adf04f8e3b01c5baf775361837b5fe https://github.com/golang/net.git
@@ -35,7 +35,7 @@ clone git github.com/coreos/go-etcd v2.0.0
 clone git github.com/hashicorp/consul v0.5.2
 
 # get graph and distribution packages
-clone git github.com/docker/distribution 7dc8d4a26b689bd4892f2f2322dbce0b7119d686
+clone git github.com/docker/distribution ec87e9b6971d831f0eff752ddb54fb64693e51cd # docker/1.8 branch
 clone git github.com/vbatts/tar-split v0.9.6
 
 clone git github.com/docker/notary 8e8122eb5528f621afcd4e2854c47302f17392f7
