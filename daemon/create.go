@@ -21,10 +21,11 @@ func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hos
 	}
 
 	warnings, err := daemon.verifyContainerSettings(hostConfig, config)
-	daemon.adaptContainerSettings(hostConfig, adjustCPUShares)
 	if err != nil {
 		return nil, warnings, err
 	}
+
+	daemon.adaptContainerSettings(hostConfig, adjustCPUShares)
 
 	container, buildWarnings, err := daemon.Create(config, hostConfig, name)
 	if err != nil {
@@ -105,7 +106,7 @@ func (daemon *Daemon) Create(config *runconfig.Config, hostConfig *runconfig.Hos
 	}
 	defer container.Unmount()
 
-	if err := createContainerPlatformSpecificSettings(container, config, img); err != nil {
+	if err := createContainerPlatformSpecificSettings(container, config, hostConfig, img); err != nil {
 		return nil, nil, err
 	}
 
