@@ -158,6 +158,7 @@ the `Dockerfile`:
 * `USER`
 * `WORKDIR`
 * `VOLUME`
+* `STOPSIGNAL`
 
 as well as:
 
@@ -293,6 +294,17 @@ any point in an image's history, much like source control.
 
 The *exec* form makes it possible to avoid shell string munging, and to `RUN`
 commands using a base image that does not contain `/bin/sh`.
+
+In the *shell* form you can use a `\` (backslash) to continue a single
+RUN instruction onto the next line. For example, consider these two lines:
+```
+RUN /bin/bash -c 'source $HOME/.bashrc ;\
+echo $HOME'
+```
+Together they are equivalent to this single line:
+```
+RUN /bin/bash -c 'source $HOME/.bashrc ; echo $HOME'
+```
 
 > **Note**:
 > To use a different shell, other than '/bin/sh', use the *exec* form
@@ -1011,6 +1023,14 @@ For example you might add something like this:
 > **Warning**: Chaining `ONBUILD` instructions using `ONBUILD ONBUILD` isn't allowed.
 
 > **Warning**: The `ONBUILD` instruction may not trigger `FROM` or `MAINTAINER` instructions.
+
+## STOPSIGNAL
+
+	STOPSIGNAL signal
+
+The `STOPSIGNAL` instruction sets the system call signal that will be sent to the container to exit.
+This signal can be a valid unsigned number that matches a position in the kernel's syscall table, for instance 9,
+or a signal name in the format SIGNAME, for instance SIGKILL.
 
 ## Dockerfile examples
 

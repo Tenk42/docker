@@ -509,7 +509,7 @@ func (container *Container) buildSandboxOptions() ([]libnetwork.SandboxOption, e
 	return sboxOptions, nil
 }
 
-func (container *Container) buildPortMapInfo(n libnetwork.Network, ep libnetwork.Endpoint, networkSettings *network.Settings) (*network.Settings, error) {
+func (container *Container) buildPortMapInfo(ep libnetwork.Endpoint, networkSettings *network.Settings) (*network.Settings, error) {
 	if ep == nil {
 		return nil, fmt.Errorf("invalid endpoint while building port map info")
 	}
@@ -565,7 +565,7 @@ func (container *Container) buildPortMapInfo(n libnetwork.Network, ep libnetwork
 	return networkSettings, nil
 }
 
-func (container *Container) buildEndpointInfo(n libnetwork.Network, ep libnetwork.Endpoint, networkSettings *network.Settings) (*network.Settings, error) {
+func (container *Container) buildEndpointInfo(ep libnetwork.Endpoint, networkSettings *network.Settings) (*network.Settings, error) {
 	if ep == nil {
 		return nil, fmt.Errorf("invalid endpoint while building port map info")
 	}
@@ -580,12 +580,10 @@ func (container *Container) buildEndpointInfo(n libnetwork.Network, ep libnetwor
 		return networkSettings, nil
 	}
 
-	ifaceList := epInfo.InterfaceList()
-	if len(ifaceList) == 0 {
+	iface := epInfo.Iface()
+	if iface == nil {
 		return networkSettings, nil
 	}
-
-	iface := ifaceList[0]
 
 	ones, _ := iface.Address().Mask.Size()
 	networkSettings.IPAddress = iface.Address().IP.String()
@@ -595,24 +593,6 @@ func (container *Container) buildEndpointInfo(n libnetwork.Network, ep libnetwor
 		onesv6, _ := iface.AddressIPv6().Mask.Size()
 		networkSettings.GlobalIPv6Address = iface.AddressIPv6().IP.String()
 		networkSettings.GlobalIPv6PrefixLen = onesv6
-	}
-
-	if len(ifaceList) == 1 {
-		return networkSettings, nil
-	}
-
-	networkSettings.SecondaryIPAddresses = make([]network.Address, 0, len(ifaceList)-1)
-	networkSettings.SecondaryIPv6Addresses = make([]network.Address, 0, len(ifaceList)-1)
-	for _, iface := range ifaceList[1:] {
-		ones, _ := iface.Address().Mask.Size()
-		addr := network.Address{Addr: iface.Address().IP.String(), PrefixLen: ones}
-		networkSettings.SecondaryIPAddresses = append(networkSettings.SecondaryIPAddresses, addr)
-
-		if iface.AddressIPv6().IP.To16() != nil {
-			onesv6, _ := iface.AddressIPv6().Mask.Size()
-			addrv6 := network.Address{Addr: iface.AddressIPv6().IP.String(), PrefixLen: onesv6}
-			networkSettings.SecondaryIPv6Addresses = append(networkSettings.SecondaryIPv6Addresses, addrv6)
-		}
 	}
 
 	return networkSettings, nil
@@ -636,12 +616,12 @@ func (container *Container) updateJoinInfo(ep libnetwork.Endpoint) error {
 func (container *Container) updateEndpointNetworkSettings(n libnetwork.Network, ep libnetwork.Endpoint) error {
 	networkSettings := &network.Settings{NetworkID: n.ID(), EndpointID: ep.ID()}
 
-	networkSettings, err := container.buildPortMapInfo(n, ep, networkSettings)
+	networkSettings, err := container.buildPortMapInfo(ep, networkSettings)
 	if err != nil {
 		return err
 	}
 
-	networkSettings, err = container.buildEndpointInfo(n, ep, networkSettings)
+	networkSettings, err = container.buildEndpointInfo(ep, networkSettings)
 	if err != nil {
 		return err
 	}
@@ -1112,12 +1092,9 @@ func (container *Container) unmountVolumes(forceSyscall bool) error {
 
 func (container *Container) networkMounts() []execdriver.Mount {
 	var mounts []execdriver.Mount
-	mode := "Z"
-	if container.hostConfig.NetworkMode.IsContainer() {
-		mode = "z"
-	}
+	shared := container.hostConfig.NetworkMode.IsContainer()
 	if container.ResolvConfPath != "" {
-		label.Relabel(container.ResolvConfPath, container.MountLabel, mode)
+		label.Relabel(container.ResolvConfPath, container.MountLabel, shared)
 		writable := !container.hostConfig.ReadonlyRootfs
 		if m, exists := container.MountPoints["/etc/resolv.conf"]; exists {
 			writable = m.RW
@@ -1130,7 +1107,7 @@ func (container *Container) networkMounts() []execdriver.Mount {
 		})
 	}
 	if container.HostnamePath != "" {
-		label.Relabel(container.HostnamePath, container.MountLabel, mode)
+		label.Relabel(container.HostnamePath, container.MountLabel, shared)
 		writable := !container.hostConfig.ReadonlyRootfs
 		if m, exists := container.MountPoints["/etc/hostname"]; exists {
 			writable = m.RW
@@ -1143,7 +1120,7 @@ func (container *Container) networkMounts() []execdriver.Mount {
 		})
 	}
 	if container.HostsPath != "" {
-		label.Relabel(container.HostsPath, container.MountLabel, mode)
+		label.Relabel(container.HostsPath, container.MountLabel, shared)
 		writable := !container.hostConfig.ReadonlyRootfs
 		if m, exists := container.MountPoints["/etc/hosts"]; exists {
 			writable = m.RW

@@ -69,7 +69,7 @@ func NewDaemon(c *check.C) *Daemon {
 		c.Fatalf("Could not create %s/graph directory", daemonFolder)
 	}
 
-	userlandProxy := true
+	userlandProxy := false
 	if env := os.Getenv("DOCKER_USERLANDPROXY"); env != "" {
 		if val, err := strconv.ParseBool(env); err != nil {
 			userlandProxy = val
@@ -1402,4 +1402,61 @@ func buildImageCmdArgs(args []string, name, dockerfile string, useCache bool) *e
 	buildCmd.Stdin = strings.NewReader(dockerfile)
 	return buildCmd
 
+}
+
+func waitForContainer(contID string, args ...string) error {
+	args = append([]string{"run", "--name", contID}, args...)
+	cmd := exec.Command(dockerBinary, args...)
+	if _, err := runCommand(cmd); err != nil {
+		return err
+	}
+
+	if err := waitRun(contID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// waitRun will wait for the specified container to be running, maximum 5 seconds.
+func waitRun(contID string) error {
+	return waitInspect(contID, "{{.State.Running}}", "true", 5)
+}
+
+// waitInspect will wait for the specified container to have the specified string
+// in the inspect output. It will wait until the specified timeout (in seconds)
+// is reached.
+func waitInspect(name, expr, expected string, timeout int) error {
+	after := time.After(time.Duration(timeout) * time.Second)
+
+	for {
+		cmd := exec.Command(dockerBinary, "inspect", "-f", expr, name)
+		out, _, err := runCommandWithOutput(cmd)
+		if err != nil {
+			if !strings.Contains(out, "No such") {
+				return fmt.Errorf("error executing docker inspect: %v\n%s", err, out)
+			}
+			select {
+			case <-after:
+				return err
+			default:
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+		}
+
+		out = strings.TrimSpace(out)
+		if out == expected {
+			break
+		}
+
+		select {
+		case <-after:
+			return fmt.Errorf("condition \"%q == %q\" not true in time", out, expected)
+		default:
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
 }

@@ -121,7 +121,8 @@ unix://[/path/to/socket] to use.
 
 **--log-driver**="*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*none*"
   Default driver for container logs. Default is `json-file`.
-  **Warning**: `docker logs` command works only for `json-file` logging driver.
+  **Warning**: the `docker logs` command works only for the `json-file` and
+  `journald` logging drivers.
 
 **--log-opt**=[]
   Logging driver specific options.
@@ -161,7 +162,7 @@ unix://[/path/to/socket] to use.
   Default is false.
 
 **--userland-proxy**=*true*|*false*
-    Rely on a userland proxy implementation for inter-container and outside-to-container loopback communications. Default is true.
+    Rely on a userland proxy implementation for inter-container and outside-to-container loopback communications. Default is false.
 
 **-v**, **--version**=*true*|*false*
   Print version information and quit. Default is false.

@@ -860,7 +860,6 @@ func (s *DockerDaemonSuite) TestDaemonIP(c *check.C) {
 	out, err := d.Cmd("run", "-d", "-p", "8000:8000", "busybox", "top")
 	c.Assert(err, check.NotNil,
 		check.Commentf("Running a container must fail with an invalid --ip option"))
-	c.Assert(strings.Contains(out, "Error starting userland proxy"), check.Equals, true)
 
 	ifName := "dummy"
 	out, err = createInterface(c, "dummy", ifName, ipStr)
@@ -1197,11 +1196,11 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverNoneLogsError(c *check.C) {
 	}
 	id := strings.TrimSpace(out)
 	out, err = s.d.Cmd("logs", id)
-	if err == nil {
-		c.Fatalf("Logs should fail with \"none\" driver")
+	if err != nil {
+		c.Fatalf("Logs request should be sent and then fail with \"none\" driver")
 	}
-	if !strings.Contains(out, `"logs" command is supported only for "json-file" logging driver`) {
-		c.Fatalf("There should be error about non-json-file driver, got: %s", out)
+	if !strings.Contains(out, `Error running logs job: Failed to get logging factory: logger: no log driver named 'none' is registered`) {
+		c.Fatalf("There should be an error about none not being a recognized log driver, got: %s", out)
 	}
 }
 
