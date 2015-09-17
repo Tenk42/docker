@@ -52,6 +52,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		flExpose      = opts.NewListOpts(nil)
 		flDNS         = opts.NewListOpts(opts.ValidateIPAddress)
 		flDNSSearch   = opts.NewListOpts(opts.ValidateDNSSearch)
+		flDNSOptions  = opts.NewListOpts(nil)
 		flExtraHosts  = opts.NewListOpts(opts.ValidateExtraHost)
 		flVolumesFrom = opts.NewListOpts(nil)
 		flLxcOpts     = opts.NewListOpts(nil)
@@ -109,6 +110,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	cmd.Var(&flExpose, []string{"#expose", "-expose"}, "Expose a port or a range of ports")
 	cmd.Var(&flDNS, []string{"#dns", "-dns"}, "Set custom DNS servers")
 	cmd.Var(&flDNSSearch, []string{"-dns-search"}, "Set custom DNS search domains")
+	cmd.Var(&flDNSOptions, []string{"-dns-opt"}, "Set DNS options")
 	cmd.Var(&flExtraHosts, []string{"-add-host"}, "Add a custom host-to-IP mapping (host:ip)")
 	cmd.Var(&flVolumesFrom, []string{"#volumes-from", "-volumes-from"}, "Mount volumes from the specified container(s)")
 	cmd.Var(&flLxcOpts, []string{"#lxc-conf", "-lxc-conf"}, "Add custom lxc options")
@@ -148,13 +150,14 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		attachStderr = true
 	}
 
+	var err error
+
 	var flMemory int64
 	if *flMemoryString != "" {
-		parsedMemory, err := units.RAMInBytes(*flMemoryString)
+		flMemory, err = units.RAMInBytes(*flMemoryString)
 		if err != nil {
 			return nil, nil, cmd, err
 		}
-		flMemory = parsedMemory
 	}
 
 	var memorySwap int64
@@ -162,21 +165,19 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		if *flMemorySwap == "-1" {
 			memorySwap = -1
 		} else {
-			parsedMemorySwap, err := units.RAMInBytes(*flMemorySwap)
+			memorySwap, err = units.RAMInBytes(*flMemorySwap)
 			if err != nil {
 				return nil, nil, cmd, err
 			}
-			memorySwap = parsedMemorySwap
 		}
 	}
 
 	var KernelMemory int64
 	if *flKernelMemory != "" {
-		parsedKernelMemory, err := units.RAMInBytes(*flKernelMemory)
+		KernelMemory, err = units.RAMInBytes(*flKernelMemory)
 		if err != nil {
 			return nil, nil, cmd, err
 		}
-		KernelMemory = parsedKernelMemory
 	}
 
 	swappiness := *flSwappiness
@@ -323,7 +324,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		MacAddress:      *flMacAddress,
 		Entrypoint:      entrypoint,
 		WorkingDir:      *flWorkingDir,
-		Labels:          convertKVStringsToMap(labels),
+		Labels:          ConvertKVStringsToMap(labels),
 		StopSignal:      *flStopSignal,
 	}
 
@@ -348,6 +349,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		PublishAllPorts:  *flPublishAll,
 		DNS:              flDNS.GetAll(),
 		DNSSearch:        flDNSSearch.GetAll(),
+		DNSOptions:       flDNSOptions.GetAll(),
 		ExtraHosts:       flExtraHosts.GetAll(),
 		VolumesFrom:      flVolumesFrom.GetAll(),
 		NetworkMode:      NetworkMode(*flNetMode),
@@ -392,8 +394,8 @@ func readKVStrings(files []string, override []string) ([]string, error) {
 	return envVariables, nil
 }
 
-// converts ["key=value"] to {"key":"value"}
-func convertKVStringsToMap(values []string) map[string]string {
+// ConvertKVStringsToMap converts ["key=value"] to {"key":"value"}
+func ConvertKVStringsToMap(values []string) map[string]string {
 	result := make(map[string]string, len(values))
 	for _, value := range values {
 		kv := strings.SplitN(value, "=", 2)
@@ -408,7 +410,7 @@ func convertKVStringsToMap(values []string) map[string]string {
 }
 
 func parseLoggingOpts(loggingDriver string, loggingOpts []string) (map[string]string, error) {
-	loggingOptsMap := convertKVStringsToMap(loggingOpts)
+	loggingOptsMap := ConvertKVStringsToMap(loggingOpts)
 	if loggingDriver == "none" && len(loggingOpts) > 0 {
 		return map[string]string{}, fmt.Errorf("Invalid logging opts for driver %s", loggingDriver)
 	}

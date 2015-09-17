@@ -174,8 +174,9 @@ func getDevicesFromPath(deviceMapping runconfig.DeviceMapping) (devs []*configs.
 func populateCommand(c *Container, env []string) error {
 	var en *execdriver.Network
 	if !c.Config.NetworkDisabled {
-		en = &execdriver.Network{
-			NamespacePath: c.NetworkSettings.SandboxKey,
+		en = &execdriver.Network{}
+		if !c.daemon.execDriver.SupportsHooks() || c.hostConfig.NetworkMode.IsHost() {
+			en.NamespacePath = c.NetworkSettings.SandboxKey
 		}
 
 		parts := strings.SplitN(string(c.hostConfig.NetworkMode), ":", 2)
@@ -396,6 +397,7 @@ func (container *Container) buildSandboxOptions() ([]libnetwork.SandboxOption, e
 		err         error
 		dns         []string
 		dnsSearch   []string
+		dnsOptions  []string
 	)
 
 	sboxOptions = append(sboxOptions, libnetwork.OptionHostname(container.Config.Hostname),
@@ -405,6 +407,10 @@ func (container *Container) buildSandboxOptions() ([]libnetwork.SandboxOption, e
 		sboxOptions = append(sboxOptions, libnetwork.OptionUseDefaultSandbox())
 		sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
 		sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+	} else if container.daemon.execDriver.SupportsHooks() {
+		// OptionUseExternalKey is mandatory for userns support.
+		// But optional for non-userns support
+		sboxOptions = append(sboxOptions, libnetwork.OptionUseExternalKey())
 	}
 
 	container.HostsPath, err = container.getRootResourcePath("hosts")
@@ -437,6 +443,16 @@ func (container *Container) buildSandboxOptions() ([]libnetwork.SandboxOption, e
 
 	for _, ds := range dnsSearch {
 		sboxOptions = append(sboxOptions, libnetwork.OptionDNSSearch(ds))
+	}
+
+	if len(container.hostConfig.DNSOptions) > 0 {
+		dnsOptions = container.hostConfig.DNSOptions
+	} else if len(container.daemon.configStore.DNSOptions) > 0 {
+		dnsOptions = container.daemon.configStore.DNSOptions
+	}
+
+	for _, ds := range dnsOptions {
+		sboxOptions = append(sboxOptions, libnetwork.OptionDNSOptions(ds))
 	}
 
 	if container.NetworkSettings.SecondaryIPAddresses != nil {
@@ -947,6 +963,20 @@ func (container *Container) initializeNetworking() error {
 	return container.buildHostnameFile()
 }
 
+// called from the libcontainer pre-start hook to set the network
+// namespace configuration linkage to the libnetwork "sandbox" entity
+func (container *Container) setNetworkNamespaceKey(pid int) error {
+	path := fmt.Sprintf("/proc/%d/ns/net", pid)
+	var sandbox libnetwork.Sandbox
+	search := libnetwork.SandboxContainerWalker(&sandbox, container.ID)
+	container.daemon.netController.WalkSandboxes(search)
+	if sandbox == nil {
+		return fmt.Errorf("no sandbox present for %s", container.ID)
+	}
+
+	return sandbox.SetKey(path)
+}
+
 func (container *Container) getIpcContainer() (*Container, error) {
 	containerID := container.hostConfig.IpcMode.Container()
 	c, err := container.daemon.Get(containerID)
@@ -1188,14 +1218,19 @@ func (container *Container) removeMountPoints(rm bool) error {
 		}
 		container.daemon.volumes.Decrement(m.Volume)
 		if rm {
-			if err := container.daemon.volumes.Remove(m.Volume); err != nil {
-				rmErrors = append(rmErrors, fmt.Sprintf("%v\n", err))
-				continue
+			err := container.daemon.volumes.Remove(m.Volume)
+			// ErrVolumeInUse is ignored because having this
+			// volume being referenced by othe container is
+			// not an error, but an implementation detail.
+			// This prevents docker from logging "ERROR: Volume in use"
+			// where there is another container using the volume.
+			if err != nil && err != ErrVolumeInUse {
+				rmErrors = append(rmErrors, err.Error())
 			}
 		}
 	}
 	if len(rmErrors) > 0 {
-		return fmt.Errorf("Error removing volumes:\n%v", rmErrors)
+		return fmt.Errorf("Error removing volumes:\n%v", strings.Join(rmErrors, "\n"))
 	}
 	return nil
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api"
+	derr "github.com/docker/docker/api/errors"
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/daemon/execdriver"
 	"github.com/docker/docker/daemon/execdriver/execdrivers"
@@ -46,6 +47,8 @@ import (
 	"github.com/docker/docker/registry"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/trust"
+	volumedrivers "github.com/docker/docker/volume/drivers"
+	"github.com/docker/docker/volume/local"
 	"github.com/docker/libnetwork"
 	"github.com/opencontainers/runc/libcontainer/netlink"
 )
@@ -137,6 +140,10 @@ func (daemon *Daemon) Get(prefixOrName string) (*Container, error) {
 
 	containerID, indexError := daemon.idIndex.Get(prefixOrName)
 	if indexError != nil {
+		// When truncindex defines an error type, use that instead
+		if strings.Contains(indexError.Error(), "no such id") {
+			return nil, derr.ErrorCodeNoSuchContainer.WithArgs(prefixOrName)
+		}
 		return nil, indexError
 	}
 	return daemon.containers.Get(containerID), nil
@@ -314,7 +321,9 @@ func (daemon *Daemon) restore() error {
 			}
 
 			if err := daemon.Register(container); err != nil {
-				logrus.Debugf("Failed to register container %s: %s", container.ID, err)
+				logrus.Errorf("Failed to register container %s: %s", container.ID, err)
+				// The container register failed should not be started.
+				return
 			}
 
 			// check the restart policy on the containers and restart any container with
@@ -323,7 +332,7 @@ func (daemon *Daemon) restore() error {
 				logrus.Debugf("Starting container %s", container.ID)
 
 				if err := container.Start(); err != nil {
-					logrus.Debugf("Failed to start container %s: %s", container.ID, err)
+					logrus.Errorf("Failed to start container %s: %s", container.ID, err)
 				}
 			}
 		}(c.container, c.registered)
@@ -868,8 +877,14 @@ func (daemon *Daemon) unmount(container *Container) error {
 	return nil
 }
 
-func (daemon *Daemon) run(c *Container, pipes *execdriver.Pipes, startCallback execdriver.StartCallback) (execdriver.ExitStatus, error) {
-	return daemon.execDriver.Run(c.command, pipes, startCallback)
+func (daemon *Daemon) run(c *Container, pipes *execdriver.Pipes, startCallback execdriver.DriverCallback) (execdriver.ExitStatus, error) {
+	hooks := execdriver.Hooks{
+		Start: startCallback,
+	}
+	hooks.PreStart = append(hooks.PreStart, func(processConfig *execdriver.ProcessConfig, pid int) error {
+		return c.setNetworkNamespaceKey(pid)
+	})
+	return daemon.execDriver.Run(c.command, pipes, hooks)
 }
 
 func (daemon *Daemon) kill(c *Container, sig int) error {
@@ -1104,4 +1119,13 @@ func (daemon *Daemon) verifyContainerSettings(hostConfig *runconfig.HostConfig, 
 
 	// Now do platform-specific verification
 	return verifyPlatformContainerSettings(daemon, hostConfig, config)
+}
+
+func configureVolumes(config *Config) (*volumeStore, error) {
+	volumesDriver, err := local.New(config.Root)
+	if err != nil {
+		return nil, err
+	}
+	volumedrivers.Register(volumesDriver, volumesDriver.Name())
+	return newVolumeStore(volumesDriver.List()), nil
 }
