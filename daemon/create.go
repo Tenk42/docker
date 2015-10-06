@@ -1,11 +1,11 @@
 package daemon
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/types"
+	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/graph/tags"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/parsers"
@@ -15,14 +15,14 @@ import (
 )
 
 // ContainerCreate takes configs and creates a container.
-func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hostConfig *runconfig.HostConfig, adjustCPUShares bool) (*Container, []string, error) {
+func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hostConfig *runconfig.HostConfig, adjustCPUShares bool) (types.ContainerCreateResponse, error) {
 	if config == nil {
-		return nil, nil, fmt.Errorf("Config cannot be empty in order to create a container")
+		return types.ContainerCreateResponse{}, derr.ErrorCodeEmptyConfig
 	}
 
 	warnings, err := daemon.verifyContainerSettings(hostConfig, config)
 	if err != nil {
-		return nil, warnings, err
+		return types.ContainerCreateResponse{"", warnings}, err
 	}
 
 	daemon.adaptContainerSettings(hostConfig, adjustCPUShares)
@@ -31,20 +31,20 @@ func (daemon *Daemon) ContainerCreate(name string, config *runconfig.Config, hos
 	if err != nil {
 		if daemon.Graph().IsNotExist(err, config.Image) {
 			if strings.Contains(config.Image, "@") {
-				return nil, warnings, fmt.Errorf("No such image: %s", config.Image)
+				return types.ContainerCreateResponse{"", warnings}, derr.ErrorCodeNoSuchImageHash.WithArgs(config.Image)
 			}
 			img, tag := parsers.ParseRepositoryTag(config.Image)
 			if tag == "" {
 				tag = tags.DefaultTag
 			}
-			return nil, warnings, fmt.Errorf("No such image: %s:%s", img, tag)
+			return types.ContainerCreateResponse{"", warnings}, derr.ErrorCodeNoSuchImageTag.WithArgs(img, tag)
 		}
-		return nil, warnings, err
+		return types.ContainerCreateResponse{"", warnings}, err
 	}
 
 	warnings = append(warnings, buildWarnings...)
 
-	return container, warnings, nil
+	return types.ContainerCreateResponse{container.ID, warnings}, nil
 }
 
 // Create creates a new container from the given configuration with a given name.

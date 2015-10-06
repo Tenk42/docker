@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/daemon/execdriver"
+	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/units"
 )
 
@@ -111,7 +112,7 @@ func wait(waitChan <-chan struct{}, timeout time.Duration) error {
 	}
 	select {
 	case <-time.After(timeout):
-		return fmt.Errorf("Timed out: %v", timeout)
+		return derr.ErrorCodeTimedOut.WithArgs(timeout)
 	case <-waitChan:
 		return nil
 	}
@@ -120,7 +121,7 @@ func wait(waitChan <-chan struct{}, timeout time.Duration) error {
 // waitRunning waits until state is running. If state is already
 // running it returns immediately. If you want wait forever you must
 // supply negative timeout. Returns pid, that was passed to
-// setRunningLocking.
+// setRunning.
 func (s *State) waitRunning(timeout time.Duration) (int, error) {
 	s.Lock()
 	if s.Running {
@@ -175,12 +176,6 @@ func (s *State) getExitCode() int {
 	res := s.ExitCode
 	s.Unlock()
 	return res
-}
-
-func (s *State) setRunningLocking(pid int) {
-	s.Lock()
-	s.setRunning(pid)
-	s.Unlock()
 }
 
 func (s *State) setRunning(pid int) {
@@ -251,7 +246,7 @@ func (s *State) setRemovalInProgress() error {
 	s.Lock()
 	defer s.Unlock()
 	if s.removalInProgress {
-		return fmt.Errorf("Status is already RemovalInProgress")
+		return derr.ErrorCodeAlreadyRemoving
 	}
 	s.removalInProgress = true
 	return nil

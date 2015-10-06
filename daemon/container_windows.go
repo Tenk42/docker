@@ -3,10 +3,10 @@
 package daemon
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/docker/docker/daemon/execdriver"
+	derr "github.com/docker/docker/errors"
 )
 
 // DefaultPathEnv is deliberately empty on Windows as the default path will be set by
@@ -64,7 +64,7 @@ func populateCommand(c *Container, env []string) error {
 			}
 		}
 	default:
-		return fmt.Errorf("invalid network mode: %s", c.hostConfig.NetworkMode)
+		return derr.ErrorCodeInvalidNetworkMode.WithArgs(c.hostConfig.NetworkMode)
 	}
 
 	pid := &execdriver.Pid{}
@@ -72,8 +72,10 @@ func populateCommand(c *Container, env []string) error {
 	// TODO Windows. This can probably be factored out.
 	pid.HostPid = c.hostConfig.PidMode.IsHost()
 
-	// TODO Windows. Resource controls to be implemented later.
-	resources := &execdriver.Resources{}
+	// TODO Windows. More resource controls to be implemented later.
+	resources := &execdriver.Resources{
+		CPUShares: c.hostConfig.CPUShares,
+	}
 
 	// TODO Windows. Further refactoring required (privileged/user)
 	processConfig := execdriver.ProcessConfig{
@@ -90,22 +92,22 @@ func populateCommand(c *Container, env []string) error {
 	var layerPaths []string
 	img, err := c.daemon.graph.Get(c.ImageID)
 	if err != nil {
-		return fmt.Errorf("Failed to graph.Get on ImageID %s - %s", c.ImageID, err)
+		return derr.ErrorCodeGetGraph.WithArgs(c.ImageID, err)
 	}
 	for i := img; i != nil && err == nil; i, err = c.daemon.graph.GetParent(i) {
 		lp, err := c.daemon.driver.Get(i.ID, "")
 		if err != nil {
-			return fmt.Errorf("Failed to get layer path from graphdriver %s for ImageID %s - %s", c.daemon.driver.String(), i.ID, err)
+			return derr.ErrorCodeGetLayer.WithArgs(c.daemon.driver.String(), i.ID, err)
 		}
 		layerPaths = append(layerPaths, lp)
 		err = c.daemon.driver.Put(i.ID)
 		if err != nil {
-			return fmt.Errorf("Failed to put layer path from graphdriver %s for ImageID %s - %s", c.daemon.driver.String(), i.ID, err)
+			return derr.ErrorCodePutLayer.WithArgs(c.daemon.driver.String(), i.ID, err)
 		}
 	}
 	m, err := c.daemon.driver.GetMetadata(c.ID)
 	if err != nil {
-		return fmt.Errorf("Failed to get layer metadata - %s", err)
+		return derr.ErrorCodeGetLayerMetadata.WithArgs(err)
 	}
 	layerFolder := m["dir"]
 
@@ -167,4 +169,20 @@ func (container *Container) prepareMountPoints() error {
 // removeMountPoints is a no-op on Windows.
 func (container *Container) removeMountPoints(_ bool) error {
 	return nil
+}
+
+func (container *Container) setupIpcDirs() error {
+	return nil
+}
+
+func (container *Container) unmountIpcMounts() error {
+	return nil
+}
+
+func (container *Container) ipcMounts() []execdriver.Mount {
+	return nil
+}
+
+func getDefaultRouteMtu() (int, error) {
+	return -1, errSystemNotSupported
 }

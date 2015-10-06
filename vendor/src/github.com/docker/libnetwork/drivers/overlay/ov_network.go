@@ -40,6 +40,10 @@ func (d *driver) CreateNetwork(id string, option map[string]interface{}) error {
 		return fmt.Errorf("invalid network id")
 	}
 
+	if err := d.configure(); err != nil {
+		return err
+	}
+
 	n := &network{
 		id:        id,
 		driver:    d,
@@ -152,22 +156,7 @@ func (n *network) initSandbox() error {
 		return fmt.Errorf("could not create bridge inside the network sandbox: %v", err)
 	}
 
-	vxlanName, err := createVxlan(n.vxlanID())
-	if err != nil {
-		return err
-	}
-
-	if err := sbox.AddInterface(vxlanName, "vxlan",
-		sbox.InterfaceOptions().Master("bridge1")); err != nil {
-		return fmt.Errorf("could not add vxlan interface inside the network sandbox: %v",
-			err)
-	}
-
-	n.vxlanName = vxlanName
-
 	n.setSandbox(sbox)
-
-	n.driver.peerDbUpdateSandbox(n.id)
 
 	var nlSock *nl.NetlinkSocket
 	sbox.InvokeFunc(func() {
@@ -178,7 +167,27 @@ func (n *network) initSandbox() error {
 	})
 
 	go n.watchMiss(nlSock)
+	return n.initVxlan()
+}
 
+func (n *network) initVxlan() error {
+	var vxlanName string
+	n.Lock()
+	sbox := n.sbox
+	n.Unlock()
+
+	vxlanName, err := createVxlan(n.vxlanID())
+	if err != nil {
+		return err
+	}
+
+	if err = sbox.AddInterface(vxlanName, "vxlan",
+		sbox.InterfaceOptions().Master("bridge1")); err != nil {
+		return fmt.Errorf("could not add vxlan interface inside the network sandbox: %v", err)
+	}
+
+	n.vxlanName = vxlanName
+	n.driver.peerDbUpdateSandbox(n.id)
 	return nil
 }
 
@@ -297,6 +306,10 @@ func (n *network) Exists() bool {
 	return n.dbExists
 }
 
+func (n *network) Skip() bool {
+	return false
+}
+
 func (n *network) SetValue(value []byte) error {
 	var vni uint32
 	err := json.Unmarshal(value, &vni)
@@ -304,6 +317,10 @@ func (n *network) SetValue(value []byte) error {
 		n.setVxlanID(vni)
 	}
 	return err
+}
+
+func (n *network) DataScope() datastore.DataScope {
+	return datastore.GlobalScope
 }
 
 func (n *network) writeToStore() error {

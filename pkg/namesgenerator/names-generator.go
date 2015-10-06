@@ -11,9 +11,12 @@ var (
 		"admiring",
 		"adoring",
 		"agitated",
+		"amazing",
 		"angry",
+		"awesome",
 		"backstabbing",
 		"berserk",
+		"big",
 		"boring",
 		"clever",
 		"cocky",
@@ -32,6 +35,7 @@ var (
 		"fervent",
 		"focused",
 		"furious",
+		"gigantic",
 		"gloomy",
 		"goofy",
 		"grave",
@@ -59,11 +63,13 @@ var (
 		"sick",
 		"silly",
 		"sleepy",
+		"small",
 		"stoic",
 		"stupefied",
 		"suspicious",
 		"tender",
 		"thirsty",
+		"tiny",
 		"trusting",
 	}
 
@@ -163,6 +169,9 @@ var (
 		// Leonardo Da Vinci invented too many things to list here. https://en.wikipedia.org/wiki/Leonardo_da_Vinci.
 		"davinci",
 
+		// Edsger Wybe Dijkstra was a Dutch computer scientist and mathematical scientist. https://en.wikipedia.org/wiki/Edsger_W._Dijkstra.
+		"dijkstra",
+
 		// Donna Dubinsky - played an integral role in the development of personal digital assistants (PDAs) serving as CEO of Palm, Inc. and co-founding Handspring. https://en.wikipedia.org/wiki/Donna_Dubinsky
 		"dubinsky",
 
@@ -195,6 +204,9 @@ var (
 
 		// Galileo was a founding father of modern astronomy, and faced politics and obscurantism to establish scientific truth.  https://en.wikipedia.org/wiki/Galileo_Galilei
 		"galileo",
+
+		// William Henry "Bill" Gates III is an American business magnate, philanthropist, investor, computer programmer, and inventor. https://en.wikipedia.org/wiki/Bill_Gates
+		"gates",
 
 		// Adele Goldberg, was one of the designers and developers of the Smalltalk language. https://en.wikipedia.org/wiki/Adele_Goldberg_(computer_scientist)
 		"goldberg",
@@ -238,6 +250,9 @@ var (
 		// Mary Lou Jepsen, was the founder and chief technology officer of One Laptop Per Child (OLPC), and the founder of Pixel Qi. https://en.wikipedia.org/wiki/Mary_Lou_Jepsen
 		"jepsen",
 
+		// Irène Joliot-Curie - French scientist who was awarded the Nobel Prize for Chemistry in 1935. Daughter of Marie and Pierre Curie. https://en.wikipedia.org/wiki/Ir%C3%A8ne_Joliot-Curie
+		"joliot",
+
 		// Karen Spärck Jones came up with the concept of inverse document frequency, which is used in most search engines today. https://en.wikipedia.org/wiki/Karen_Sp%C3%A4rck_Jones
 		"jones",
 
@@ -258,6 +273,9 @@ var (
 
 		// Maria Kirch - German astronomer and first woman to discover a comet - https://en.wikipedia.org/wiki/Maria_Margarethe_Kirch
 		"kirch",
+
+		// Donald Knuth - American computer scientist, author of "The Art of Computer Programming" and creator of the TeX typesetting system. https://en.wikipedia.org/wiki/Donald_Knuth
+		"knuth",
 
 		// Sophie Kowalevski - Russian mathematician responsible for important original contributions to analysis, differential equations and mechanics - https://en.wikipedia.org/wiki/Sofia_Kovalevskaya
 		"kowalevski",
@@ -316,6 +334,9 @@ var (
 		// Lise Meitner was an Austrian physicist who worked on radioactivity and nuclear physics. She played a major role in the discovery of nuclear fission. https://en.wikipedia.org/wiki/Lise_Meitner
 		"mietner",
 
+		// Maryam Mirzakhani - an Iranian mathematician and the first woman to win the Fields Medal. https://en.wikipedia.org/wiki/Maryam_Mirzakhani
+		"mirzakhani",
+
 		// Samuel Morse - contributed to the invention of a single-wire telegraph system based on European telegraphs and was a co-developer of the Morse code - https://en.wikipedia.org/wiki/Samuel_Morse
 		"morse",
 
@@ -364,8 +385,14 @@ var (
 		// Srinivasa Ramanujan - Indian mathematician and autodidact who made extraordinary contributions to mathematical analysis, number theory, infinite series, and continued fractions. - https://en.wikipedia.org/wiki/Srinivasa_Ramanujan
 		"ramanujan",
 
+		// Sally Kristen Ride was an American physicist and astronaut. She was the first American woman in space, and the youngest American astronaut. https://en.wikipedia.org/wiki/Sally_Ride
+		"ride",
+
 		// Dennis Ritchie - co-creator of UNIX and the C programming language. - https://en.wikipedia.org/wiki/Dennis_Ritchie
 		"ritchie",
+
+		// Wilhelm Conrad Röntgen - German physicist who was awarded the first Nobel Prize in Physics in 1901 for the discovery of X-rays (Röntgen rays). https://en.wikipedia.org/wiki/Wilhelm_R%C3%B6ntgen
+		"roentgen",
 
 		// Rosalind Franklin - British biophysicist and X-ray crystallographer whose research was critical to the understanding of DNA - https://en.wikipedia.org/wiki/Rosalind_Franklin
 		"rosalind",

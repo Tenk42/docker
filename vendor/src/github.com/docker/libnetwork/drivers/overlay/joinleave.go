@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/docker/libnetwork/driverapi"
 	"github.com/vishvananda/netlink"
@@ -72,18 +73,9 @@ func (d *driver) Join(nid, eid string, sboxKey string, jinfo driverapi.JoinInfo,
 		}
 	}
 
-	err = jinfo.SetGateway(bridgeIP.IP)
-	if err != nil {
-		return err
-	}
-
 	d.peerDbAdd(nid, eid, ep.addr.IP, ep.mac,
-		d.serfInstance.LocalMember().Addr, true)
-	d.notifyCh <- ovNotify{
-		action: "join",
-		nid:    nid,
-		eid:    eid,
-	}
+		net.ParseIP(d.bindAddress), true)
+	d.pushLocalEndpointEvent("join", nid, eid)
 
 	return nil
 }

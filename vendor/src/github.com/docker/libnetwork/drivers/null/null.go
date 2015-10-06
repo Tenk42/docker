@@ -3,6 +3,7 @@ package null
 import (
 	"sync"
 
+	"github.com/docker/libnetwork/datastore"
 	"github.com/docker/libnetwork/driverapi"
 	"github.com/docker/libnetwork/types"
 )
@@ -15,15 +16,11 @@ type driver struct {
 }
 
 // Init registers a new instance of null driver
-func Init(dc driverapi.DriverCallback) error {
+func Init(dc driverapi.DriverCallback, config map[string]interface{}) error {
 	c := driverapi.Capability{
-		Scope: driverapi.LocalScope,
+		DataScope: datastore.LocalScope,
 	}
 	return dc.RegisterDriver(networkType, &driver{}, c)
-}
-
-func (d *driver) Config(option map[string]interface{}) error {
-	return nil
 }
 
 func (d *driver) CreateNetwork(id string, option map[string]interface{}) error {
@@ -67,4 +64,14 @@ func (d *driver) Leave(nid, eid string) error {
 
 func (d *driver) Type() string {
 	return networkType
+}
+
+// DiscoverNew is a notification for a new discovery event, such as a new node joining a cluster
+func (d *driver) DiscoverNew(dType driverapi.DiscoveryType, data interface{}) error {
+	return nil
+}
+
+// DiscoverDelete is a notification for a discovery delete event, such as a node leaving a cluster
+func (d *driver) DiscoverDelete(dType driverapi.DiscoveryType, data interface{}) error {
+	return nil
 }

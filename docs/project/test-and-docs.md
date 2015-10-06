@@ -56,7 +56,7 @@ change an existing one.
 
 Before submitting any code change, you should run the entire Docker test suite.
 The `Makefile` contains a target for the entire test suite. The target's name
-is simply `test`. The make file contains several targets for testing:
+is simply `test`. The `Makefile` contains several targets for testing:
 
 <style type="text/css">
 .monospaced {font-family: Monaco, Consolas, "Lucida Console", monospace !important;}
@@ -107,19 +107,46 @@ Run the entire test suite on your current repository:
     * cross-compiles all the binaries for the various operating systems
     * runs all the tests in the system
 
-    It can take several minutes to run all the tests. When they complete
+    It can take approximate one hour to run all the tests. The time depends
+    on your host performance. The default timeout is 60 minutes, which is
+    defined in hack/make.sh(${TIMEOUT:=60m}). You can modify the timeout
+    value on the basis of your host performance. When they complete
     successfully, you see the output concludes with something like this:
 
 
-        [PASSED]: top - sleep process should be listed in privileged mode
-        [PASSED]: version - verify that it works and that the output is properly formatted
+        PASS: docker_cli_pull_test.go:133: DockerHubPullSuite.TestPullClientDisconnect	1.127s
+        PASS: docker_cli_pull_test.go:16: DockerHubPullSuite.TestPullFromCentralRegistry	1.049s
+        PASS: docker_cli_pull_test.go:65: DockerHubPullSuite.TestPullFromCentralRegistryImplicitRefParts	9.795s
+        PASS: docker_cli_pull_test.go:42: DockerHubPullSuite.TestPullNonExistingImage	2.158s
+        PASS: docker_cli_pull_test.go:92: DockerHubPullSuite.TestPullScratchNotAllowed	0.044s
+        OK: 918 passed, 13 skipped
         PASS
-        coverage: 70.8% of statements
-        ---> Making bundle: test-docker-py (in bundles/1.5.0-dev/test-docker-py)
-        +++ exec docker daemon --debug --host unix:///go/src/github.com/docker/docker/bundles/1.5.0-dev/test-docker-py/docker.sock --storage-driver vfs --exec-driver native --pidfile /go/src/github.com/docker/docker/bundles/1.5.0-dev/test-docker-py/docker.pid
-        .................................................................
+        coverage: 72.9% of statements
+        ok  	github.com/docker/docker/integration-cli	1638.553s
+        ---> Making bundle: .integration-daemon-stop (in bundles/1.9.0-dev/test-integration-cli)
+        ++++ cat bundles/1.9.0-dev/test-integration-cli/docker.pid
+        +++ kill 9453
+        +++ /etc/init.d/apparmor stop
+         * Clearing AppArmor profiles cache
+           ...done.
+        All profile caches have been cleared, but no profiles have been unloaded.
+        Unloading profiles will leave already running processes permanently
+        unconfined, which can lead to unexpected situations.
+
+        To set a process to complain mode, use the command line tool
+        'aa-complain'. To really tear down all profiles, run the init script
+        with the 'teardown' option."
+
+        ---> Making bundle: test-docker-py (in bundles/1.9.0-dev/test-docker-py)
+        ---> Making bundle: .integration-daemon-start (in bundles/1.9.0-dev/test-docker-py)
+        +++ /etc/init.d/apparmor start
+         * Starting AppArmor profiles
+        Skipping profile in /etc/apparmor.d/disable: usr.sbin.rsyslogd
+           ...done.
+        +++ exec docker daemon --debug --host unix:///go/src/github.com/docker/docker/bundles/1.9.0-dev/test-docker-py/docker.sock --storage-driver overlay --exec-driver native --pidfile bundles/1.9.0-dev/test-docker-py/docker.pid --userland-proxy=true
+        ..............s..............s......................................
         ----------------------------------------------------------------------
-        Ran 65 tests in 89.266s
+        Ran 68 tests in 79.135s
  
 
 ### Run test targets inside the development container
@@ -157,6 +184,29 @@ Most test targets require that you build these precursor targets first:
 
 
 ## Running individual or multiple named tests 
+
+### Unit tests 
+
+We use golang standard [testing](https://golang.org/pkg/testing/)
+package or [gocheck](https://labix.org/gocheck) for our unit tests. 
+
+You can use the `TESTDIRS` environment variable to run unit tests for
+a single package.
+
+    $ TESTDIRS='opts' make test-unit
+
+You can also use the `TESTFLAGS` environment variable to run a single test. The
+flag's value is passed as arguments to the `go test` command. For example, from
+your local host you can run the `TestBuild` test with this command:
+
+    $ TESTFLAGS='-test.run ^TestValidateIPAddress$' make test-unit
+
+On unit tests, it's better to use `TESTFLAGS` in combination with
+`TESTDIRS` to make it quicker to run a specific test.
+
+    $ TESTDIRS='opts' TESTFLAGS='-test.run ^TestValidateIPAddress$' make test-unit
+
+### Integration tests 
 
 We use [gocheck](https://labix.org/gocheck) for our integration-cli tests. 
 You can use the `TESTFLAGS` environment variable to run a single test. The

@@ -12,6 +12,16 @@ parent = "mn_use_docker"
 
 The following list of features are deprecated.
 
+### Command line short variant options
+**Deprecated In Release: v1.9**
+
+**Target For Removal In Release: v1.11**
+
+The following short variant options are deprecated in favor of their long
+variants:
+
+    docker run -c (--cpu-shares)
+
 ### Driver Specific Log Tags
 **Deprecated In Release: v1.9**
 
@@ -22,8 +32,6 @@ Because of which, the driver specific log tag options `syslog-tag`, `gelf-tag` a
 `fluentd-tag` have been deprecated in favor of the generic `tag` option.
 
     docker --log-driver=syslog --log-opt tag="{{.ImageName}}/{{.Name}}/{{.ID}}"
-
-
 
 ### LXC built-in exec driver
 **Deprecated In Release: v1.8**
@@ -81,3 +89,20 @@ The following double-dash options are deprecated and have no replacement:
     docker ps --since-id
     docker ps --before-id
     docker search --trusted
+
+### Auto-creating missing host paths for bind mounts
+**Deprected in Release: v1.9**
+
+**Target for Removal in Release: 1.11**
+
+When creating a container with a bind-mounted volume-- `docker run -v /host/path:/container/path` --
+docker was automatically creating the `/host/path` if it didn't already exist.
+
+This auto-creation of the host path is deprecated and docker will error out if
+the path does not exist.
+
+### Interacting with V1 registries
+
+Version 1.9 adds a flag (`--no-legacy-registry=false`) which prevents the docker daemon from `pull`, `push`, and `login` operations against v1 registries.  Though disabled by default, this signals the intent to deprecate the v1 protocol.
+
+

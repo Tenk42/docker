@@ -6,6 +6,7 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/docker/pkg/plugins"
+	"github.com/docker/libnetwork/datastore"
 	"github.com/docker/libnetwork/driverapi"
 	"github.com/docker/libnetwork/drivers/remote/api"
 	"github.com/docker/libnetwork/types"
@@ -26,7 +27,7 @@ func newDriver(name string, client *plugins.Client) driverapi.Driver {
 
 // Init makes sure a remote driver is registered when a network driver
 // plugin is activated.
-func Init(dc driverapi.DriverCallback) error {
+func Init(dc driverapi.DriverCallback, config map[string]interface{}) error {
 	plugins.Handle(driverapi.NetworkPluginEndpointType, func(name string, client *plugins.Client) {
 		// negotiate driver capability with client
 		d := newDriver(name, client)
@@ -52,9 +53,9 @@ func (d *driver) getCapabilities() (*driverapi.Capability, error) {
 	c := &driverapi.Capability{}
 	switch capResp.Scope {
 	case "global":
-		c.Scope = driverapi.GlobalScope
+		c.DataScope = datastore.GlobalScope
 	case "local":
-		c.Scope = driverapi.LocalScope
+		c.DataScope = datastore.LocalScope
 	default:
 		return nil, fmt.Errorf("invalid capability: expecting 'local' or 'global', got %s", capResp.Scope)
 	}
@@ -192,8 +193,8 @@ func (d *driver) Join(nid, eid string, sboxKey string, jinfo driverapi.JoinInfo,
 	}
 
 	ifaceName := res.InterfaceName
-	if ifaceName == nil {
-		return fmt.Errorf("no interface name information received")
+	if jinfo.InterfaceName() != nil && ifaceName == nil {
+		return fmt.Errorf("no interface name information received while one is expected")
 	}
 
 	if iface := jinfo.InterfaceName(); iface != nil {
@@ -244,6 +245,30 @@ func (d *driver) Leave(nid, eid string) error {
 
 func (d *driver) Type() string {
 	return d.networkType
+}
+
+// DiscoverNew is a notification for a new discovery event, such as a new node joining a cluster
+func (d *driver) DiscoverNew(dType driverapi.DiscoveryType, data interface{}) error {
+	if dType != driverapi.NodeDiscovery {
+		return fmt.Errorf("Unknown discovery type : %v", dType)
+	}
+	notif := &api.DiscoveryNotification{
+		DiscoveryType: dType,
+		DiscoveryData: data,
+	}
+	return d.call("DiscoverNew", notif, &api.DiscoveryResponse{})
+}
+
+// DiscoverDelete is a notification for a discovery delete event, such as a node leaving a cluster
+func (d *driver) DiscoverDelete(dType driverapi.DiscoveryType, data interface{}) error {
+	if dType != driverapi.NodeDiscovery {
+		return fmt.Errorf("Unknown discovery type : %v", dType)
+	}
+	notif := &api.DiscoveryNotification{
+		DiscoveryType: dType,
+		DiscoveryData: data,
+	}
+	return d.call("DiscoverDelete", notif, &api.DiscoveryResponse{})
 }
 
 func parseStaticRoutes(r api.JoinResponse) ([]*types.StaticRoute, error) {

@@ -5,14 +5,16 @@ import (
 
 	"github.com/BurntSushi/toml"
 	log "github.com/Sirupsen/logrus"
+	"github.com/docker/docker/pkg/discovery"
+	"github.com/docker/libkv/store"
 	"github.com/docker/libnetwork/netlabel"
 )
 
 // Config encapsulates configurations of various Libnetwork components
 type Config struct {
-	Daemon    DaemonCfg
-	Cluster   ClusterCfg
-	Datastore DatastoreCfg
+	Daemon                  DaemonCfg
+	Cluster                 ClusterCfg
+	GlobalStore, LocalStore DatastoreCfg
 }
 
 // DaemonCfg represents libnetwork core configuration
@@ -21,12 +23,14 @@ type DaemonCfg struct {
 	DefaultNetwork string
 	DefaultDriver  string
 	Labels         []string
+	DriverCfg      map[string]interface{}
 }
 
 // ClusterCfg represents cluster configuration
 type ClusterCfg struct {
-	Discovery string
+	Watcher   discovery.Watcher
 	Address   string
+	Discovery string
 	Heartbeat uint64
 }
 
@@ -40,6 +44,7 @@ type DatastoreCfg struct {
 type DatastoreClientCfg struct {
 	Provider string
 	Address  string
+	Config   *store.Config
 }
 
 // ParseConfig parses the libnetwork configuration file
@@ -71,6 +76,13 @@ func OptionDefaultDriver(dd string) Option {
 	}
 }
 
+// OptionDriverConfig returns an option setter for driver configuration.
+func OptionDriverConfig(networkType string, config map[string]interface{}) Option {
+	return func(c *Config) {
+		c.Daemon.DriverCfg[networkType] = config
+	}
+}
+
 // OptionLabels function returns an option setter for labels
 func OptionLabels(labels []string) Option {
 	return func(c *Config) {
@@ -86,7 +98,7 @@ func OptionLabels(labels []string) Option {
 func OptionKVProvider(provider string) Option {
 	return func(c *Config) {
 		log.Infof("Option OptionKVProvider: %s", provider)
-		c.Datastore.Client.Provider = strings.TrimSpace(provider)
+		c.GlobalStore.Client.Provider = strings.TrimSpace(provider)
 	}
 }
 
@@ -94,7 +106,21 @@ func OptionKVProvider(provider string) Option {
 func OptionKVProviderURL(url string) Option {
 	return func(c *Config) {
 		log.Infof("Option OptionKVProviderURL: %s", url)
-		c.Datastore.Client.Address = strings.TrimSpace(url)
+		c.GlobalStore.Client.Address = strings.TrimSpace(url)
+	}
+}
+
+// OptionDiscoveryWatcher function returns an option setter for discovery watcher
+func OptionDiscoveryWatcher(watcher discovery.Watcher) Option {
+	return func(c *Config) {
+		c.Cluster.Watcher = watcher
+	}
+}
+
+// OptionDiscoveryAddress function returns an option setter for self discovery address
+func OptionDiscoveryAddress(address string) Option {
+	return func(c *Config) {
+		c.Cluster.Address = address
 	}
 }
 
@@ -113,4 +139,28 @@ func IsValidName(name string) bool {
 		return false
 	}
 	return true
+}
+
+// OptionLocalKVProvider function returns an option setter for kvstore provider
+func OptionLocalKVProvider(provider string) Option {
+	return func(c *Config) {
+		log.Infof("Option OptionLocalKVProvider: %s", provider)
+		c.LocalStore.Client.Provider = strings.TrimSpace(provider)
+	}
+}
+
+// OptionLocalKVProviderURL function returns an option setter for kvstore url
+func OptionLocalKVProviderURL(url string) Option {
+	return func(c *Config) {
+		log.Infof("Option OptionLocalKVProviderURL: %s", url)
+		c.LocalStore.Client.Address = strings.TrimSpace(url)
+	}
+}
+
+// OptionLocalKVProviderConfig function returns an option setter for kvstore config
+func OptionLocalKVProviderConfig(config *store.Config) Option {
+	return func(c *Config) {
+		log.Infof("Option OptionLocalKVProviderConfig: %v", config)
+		c.LocalStore.Client.Config = config
+	}
 }
