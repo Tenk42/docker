@@ -127,6 +127,10 @@ func (cli *DockerCli) dial() (net.Conn, error) {
 }
 
 func (cli *DockerCli) hijack(method, path string, setRawTerminal bool, in io.ReadCloser, stdout, stderr io.Writer, started chan io.Closer, data interface{}) error {
+	return cli.hijackWithContentType(method, path, "text/plain", setRawTerminal, in, stdout, stderr, started, data)
+}
+
+func (cli *DockerCli) hijackWithContentType(method, path, contentType string, setRawTerminal bool, in io.ReadCloser, stdout, stderr io.Writer, started chan io.Closer, data interface{}) error {
 	defer func() {
 		if started != nil {
 			close(started)
@@ -149,7 +153,7 @@ func (cli *DockerCli) hijack(method, path string, setRawTerminal bool, in io.Rea
 	}
 
 	req.Header.Set("User-Agent", "Docker-Client/"+dockerversion.VERSION+" ("+runtime.GOOS+")")
-	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "tcp")
 	req.Host = cli.addr
@@ -239,14 +243,13 @@ func (cli *DockerCli) hijack(method, path string, setRawTerminal bool, in io.Rea
 	case err := <-receiveStdout:
 		if err != nil {
 			logrus.Debugf("Error receiveStdout: %s", err)
-		}
-		if cli.isTerminalIn {
-			return nil
+			return err
 		}
 	case <-stdinDone:
 		if stdout != nil || stderr != nil {
 			if err := <-receiveStdout; err != nil {
 				logrus.Debugf("Error receiveStdout: %s", err)
+				return err
 			}
 		}
 	}

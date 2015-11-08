@@ -3,6 +3,7 @@ package opts
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -273,58 +274,6 @@ func TestValidateLink(t *testing.T) {
 	}
 }
 
-func TestValidatePath(t *testing.T) {
-	valid := []string{
-		"/home",
-		"/home:/home",
-		"/home:/something/else",
-		"/with space",
-		"/home:/with space",
-		"relative:/absolute-path",
-		"hostPath:/containerPath:ro",
-		"/hostPath:/containerPath:rw",
-		"/rw:/ro",
-		"/path:rw",
-		"/path:ro",
-		"/rw:rw",
-	}
-	invalid := map[string]string{
-		"":                "bad format for path: ",
-		"./":              "./ is not an absolute path",
-		"../":             "../ is not an absolute path",
-		"/:../":           "../ is not an absolute path",
-		"/:path":          "path is not an absolute path",
-		":":               "bad format for path: :",
-		"/tmp:":           " is not an absolute path",
-		":test":           "bad format for path: :test",
-		":/test":          "bad format for path: :/test",
-		"tmp:":            " is not an absolute path",
-		":test:":          "bad format for path: :test:",
-		"::":              "bad format for path: ::",
-		":::":             "bad format for path: :::",
-		"/tmp:::":         "bad format for path: /tmp:::",
-		":/tmp::":         "bad format for path: :/tmp::",
-		"path:ro":         "path is not an absolute path",
-		"/path:/path:sw":  "bad mode specified: sw",
-		"/path:/path:rwz": "bad mode specified: rwz",
-	}
-
-	for _, path := range valid {
-		if _, err := ValidatePath(path); err != nil {
-			t.Fatalf("ValidatePath(`%q`) should succeed: error %q", path, err)
-		}
-	}
-
-	for path, expectedError := range invalid {
-		if _, err := ValidatePath(path); err == nil {
-			t.Fatalf("ValidatePath(`%q`) should have failed validation", path)
-		} else {
-			if err.Error() != expectedError {
-				t.Fatalf("ValidatePath(`%q`) error should contain %q, got %q", path, expectedError, err.Error())
-			}
-		}
-	}
-}
 func TestValidateDevice(t *testing.T) {
 	valid := []string{
 		"/home",
@@ -423,7 +372,7 @@ func TestValidateLabel(t *testing.T) {
 	}
 }
 
-func TestValidateHost(t *testing.T) {
+func TestParseHost(t *testing.T) {
 	invalid := map[string]string{
 		"anything":              "Invalid bind address format: anything",
 		"something with spaces": "Invalid bind address format: something with spaces",
@@ -433,13 +382,20 @@ func TestValidateHost(t *testing.T) {
 		"tcp://invalid":      "Invalid bind address format: invalid",
 		"tcp://invalid:port": "Invalid bind address format: invalid:port",
 	}
+	const defaultHTTPHost = "tcp://127.0.0.1:2375"
+	var defaultHOST = "unix:///var/run/docker.sock"
+
+	if runtime.GOOS == "windows" {
+		defaultHOST = defaultHTTPHost
+	}
 	valid := map[string]string{
+		"":                         defaultHOST,
 		"fd://":                    "fd://",
 		"fd://something":           "fd://something",
 		"tcp://host:":              "tcp://host:2375",
-		"tcp://":                   "tcp://127.0.0.1:2375",
-		"tcp://:2375":              "tcp://127.0.0.1:2375", // default ip address
-		"tcp://:2376":              "tcp://127.0.0.1:2376", // default ip address
+		"tcp://":                   "tcp://localhost:2375",
+		"tcp://:2375":              "tcp://localhost:2375", // default ip address
+		"tcp://:2376":              "tcp://localhost:2376", // default ip address
 		"tcp://0.0.0.0:8080":       "tcp://0.0.0.0:8080",
 		"tcp://192.168.0.0:12000":  "tcp://192.168.0.0:12000",
 		"tcp://192.168:8080":       "tcp://192.168:8080",
@@ -450,12 +406,12 @@ func TestValidateHost(t *testing.T) {
 	}
 
 	for value, errorMessage := range invalid {
-		if _, err := ValidateHost(value); err == nil || err.Error() != errorMessage {
+		if _, err := ParseHost(defaultHTTPHost, value); err == nil || err.Error() != errorMessage {
 			t.Fatalf("Expected an error for %v with [%v], got [%v]", value, errorMessage, err)
 		}
 	}
 	for value, expected := range valid {
-		if actual, err := ValidateHost(value); err != nil || actual != expected {
+		if actual, err := ParseHost(defaultHTTPHost, value); err != nil || actual != expected {
 			t.Fatalf("Expected for %v [%v], got [%v, %v]", value, expected, actual, err)
 		}
 	}

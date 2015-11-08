@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -15,16 +16,20 @@ import (
 	"github.com/docker/docker/daemon/graphdriver"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/fileutils"
+	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/sysinfo"
-	"github.com/docker/docker/pkg/system"
 	"github.com/docker/docker/runconfig"
 	"github.com/docker/docker/utils"
+	"github.com/docker/docker/volume"
 	"github.com/docker/libnetwork"
 	nwconfig "github.com/docker/libnetwork/config"
+	"github.com/docker/libnetwork/drivers/bridge"
+	"github.com/docker/libnetwork/ipamutils"
 	"github.com/docker/libnetwork/netlabel"
 	"github.com/docker/libnetwork/options"
+	"github.com/docker/libnetwork/types"
 	"github.com/opencontainers/runc/libcontainer/label"
 	"github.com/vishvananda/netlink"
 )
@@ -110,9 +115,6 @@ func (daemon *Daemon) adaptContainerSettings(hostConfig *runconfig.HostConfig, a
 		// By default, MemorySwap is set to twice the size of Memory.
 		hostConfig.MemorySwap = hostConfig.Memory * 2
 	}
-	if hostConfig.MemoryReservation == 0 && hostConfig.Memory > 0 {
-		hostConfig.MemoryReservation = hostConfig.Memory
-	}
 }
 
 // verifyPlatformContainerSettings performs platform-specific validation of the
@@ -121,8 +123,9 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *runconfig.HostC
 	warnings := []string{}
 	sysInfo := sysinfo.New(true)
 
-	if hostConfig.LxcConf.Len() > 0 && !strings.Contains(daemon.ExecutionDriver().Name(), "lxc") {
-		return warnings, fmt.Errorf("Cannot use --lxc-conf with execdriver: %s", daemon.ExecutionDriver().Name())
+	warnings, err := daemon.verifyExperimentalContainerSettings(hostConfig, config)
+	if err != nil {
+		return warnings, err
 	}
 
 	// memory subsystem checks and adjustments
@@ -236,7 +239,7 @@ func checkConfigOptions(config *Config) error {
 		return fmt.Errorf("You specified -b & --bip, mutually exclusive options. Please specify only one.")
 	}
 	if !config.Bridge.EnableIPTables && !config.Bridge.InterContainerCommunication {
-		return fmt.Errorf("You specified --iptables=false with --icc=false. ICC uses iptables to function. Please set --icc or --iptables to true.")
+		return fmt.Errorf("You specified --iptables=false with --icc=false. ICC=false uses iptables to function. Please set --icc or --iptables to true.")
 	}
 	if !config.Bridge.EnableIPTables && config.Bridge.EnableIPMasq {
 		config.Bridge.EnableIPMasq = false
@@ -275,16 +278,16 @@ func migrateIfDownlevel(driver graphdriver.Driver, root string) error {
 	return migrateIfAufs(driver, root)
 }
 
-func configureSysInit(config *Config) (string, error) {
+func configureSysInit(config *Config, rootUID, rootGID int) (string, error) {
 	localCopy := filepath.Join(config.Root, "init", fmt.Sprintf("dockerinit-%s", dockerversion.VERSION))
 	sysInitPath := utils.DockerInitPath(localCopy)
 	if sysInitPath == "" {
-		return "", fmt.Errorf("Could not locate dockerinit: This usually means docker was built incorrectly. See https://docs.docker.com/contributing/devenvironment for official build instructions.")
+		return "", fmt.Errorf("Could not locate dockerinit: This usually means docker was built incorrectly. See https://docs.docker.com/project/set-up-dev-env/ for official build instructions.")
 	}
 
 	if sysInitPath != localCopy {
 		// When we find a suitable dockerinit binary (even if it's our local binary), we copy it into config.Root at localCopy for future use (so that the original can go away without that being a problem, for example during a package upgrade).
-		if err := os.Mkdir(filepath.Dir(localCopy), 0700); err != nil && !os.IsExist(err) {
+		if err := idtools.MkdirAs(filepath.Dir(localCopy), 0700, rootUID, rootGID); err != nil && !os.IsExist(err) {
 			return "", err
 		}
 		if _, err := fileutils.CopyFile(sysInitPath, localCopy); err != nil {
@@ -307,6 +310,9 @@ func (daemon *Daemon) networkOptions(dconfig *Config) ([]nwconfig.Option, error)
 	if dconfig == nil {
 		return options, nil
 	}
+
+	options = append(options, nwconfig.OptionDataDir(dconfig.Root))
+
 	if strings.TrimSpace(dconfig.DefaultNetwork) != "" {
 		dn := strings.Split(dconfig.DefaultNetwork, ":")
 		if len(dn) < 2 {
@@ -323,11 +329,14 @@ func (daemon *Daemon) networkOptions(dconfig *Config) ([]nwconfig.Option, error)
 
 	if strings.TrimSpace(dconfig.ClusterStore) != "" {
 		kv := strings.Split(dconfig.ClusterStore, "://")
-		if len(kv) < 2 {
+		if len(kv) != 2 {
 			return nil, fmt.Errorf("kv store daemon config must be of the form KV-PROVIDER://KV-URL")
 		}
 		options = append(options, nwconfig.OptionKVProvider(kv[0]))
-		options = append(options, nwconfig.OptionKVProviderURL(strings.Join(kv[1:], "://")))
+		options = append(options, nwconfig.OptionKVProviderURL(kv[1]))
+	}
+	if len(dconfig.ClusterOpts) > 0 {
+		options = append(options, nwconfig.OptionKVOpts(dconfig.ClusterOpts))
 	}
 
 	if daemon.discoveryWatcher != nil {
@@ -387,22 +396,50 @@ func driverOptions(config *Config) []nwconfig.Option {
 }
 
 func initBridgeDriver(controller libnetwork.NetworkController, config *Config) error {
-	netOption := options.Generic{
-		"BridgeName":         config.Bridge.Iface,
-		"DefaultBridge":      true,
-		"Mtu":                config.Mtu,
-		"EnableIPMasquerade": config.Bridge.EnableIPMasq,
-		"EnableICC":          config.Bridge.InterContainerCommunication,
+	if n, err := controller.NetworkByName("bridge"); err == nil {
+		if err = n.Delete(); err != nil {
+			return fmt.Errorf("could not delete the default bridge network: %v", err)
+		}
+	}
+
+	bridgeName := bridge.DefaultBridgeName
+	if config.Bridge.Iface != "" {
+		bridgeName = config.Bridge.Iface
+	}
+	netOption := map[string]string{
+		bridge.BridgeName:         bridgeName,
+		bridge.DefaultBridge:      strconv.FormatBool(true),
+		netlabel.DriverMTU:        strconv.Itoa(config.Mtu),
+		bridge.EnableIPMasquerade: strconv.FormatBool(config.Bridge.EnableIPMasq),
+		bridge.EnableICC:          strconv.FormatBool(config.Bridge.InterContainerCommunication),
+	}
+
+	// --ip processing
+	if config.Bridge.DefaultIP != nil {
+		netOption[bridge.DefaultBindingIP] = config.Bridge.DefaultIP.String()
+	}
+
+	ipamV4Conf := libnetwork.IpamConf{}
+
+	ipamV4Conf.AuxAddresses = make(map[string]string)
+
+	if nw, _, err := ipamutils.ElectInterfaceAddresses(bridgeName); err == nil {
+		ipamV4Conf.PreferredPool = nw.String()
+		hip, _ := types.GetHostPartIP(nw.IP, nw.Mask)
+		if hip.IsGlobalUnicast() {
+			ipamV4Conf.Gateway = nw.IP.String()
+		}
 	}
 
 	if config.Bridge.IP != "" {
-		ip, bipNet, err := net.ParseCIDR(config.Bridge.IP)
+		ipamV4Conf.PreferredPool = config.Bridge.IP
+		ip, _, err := net.ParseCIDR(config.Bridge.IP)
 		if err != nil {
 			return err
 		}
-
-		bipNet.IP = ip
-		netOption["AddressIPv4"] = bipNet
+		ipamV4Conf.Gateway = ip.String()
+	} else if bridgeName == bridge.DefaultBridgeName && ipamV4Conf.PreferredPool != "" {
+		logrus.Infof("Default bridge (%s) is assigned with an IP address %s. Daemon option --bip can be used to set a preferred IP address", bridgeName, ipamV4Conf.PreferredPool)
 	}
 
 	if config.Bridge.FixedCIDR != "" {
@@ -411,38 +448,44 @@ func initBridgeDriver(controller libnetwork.NetworkController, config *Config) e
 			return err
 		}
 
-		netOption["FixedCIDR"] = fCIDR
+		ipamV4Conf.SubPool = fCIDR.String()
 	}
 
+	if config.Bridge.DefaultGatewayIPv4 != nil {
+		ipamV4Conf.AuxAddresses["DefaultGatewayIPv4"] = config.Bridge.DefaultGatewayIPv4.String()
+	}
+
+	var ipamV6Conf *libnetwork.IpamConf
 	if config.Bridge.FixedCIDRv6 != "" {
 		_, fCIDRv6, err := net.ParseCIDR(config.Bridge.FixedCIDRv6)
 		if err != nil {
 			return err
 		}
-
-		netOption["FixedCIDRv6"] = fCIDRv6
-	}
-
-	if config.Bridge.DefaultGatewayIPv4 != nil {
-		netOption["DefaultGatewayIPv4"] = config.Bridge.DefaultGatewayIPv4
+		if ipamV6Conf == nil {
+			ipamV6Conf = &libnetwork.IpamConf{}
+		}
+		ipamV6Conf.PreferredPool = fCIDRv6.String()
 	}
 
 	if config.Bridge.DefaultGatewayIPv6 != nil {
-		netOption["DefaultGatewayIPv6"] = config.Bridge.DefaultGatewayIPv6
+		if ipamV6Conf == nil {
+			ipamV6Conf = &libnetwork.IpamConf{}
+		}
+		ipamV6Conf.AuxAddresses["DefaultGatewayIPv6"] = config.Bridge.DefaultGatewayIPv6.String()
 	}
 
-	// --ip processing
-	if config.Bridge.DefaultIP != nil {
-		netOption["DefaultBindingIP"] = config.Bridge.DefaultIP
+	v4Conf := []*libnetwork.IpamConf{&ipamV4Conf}
+	v6Conf := []*libnetwork.IpamConf{}
+	if ipamV6Conf != nil {
+		v6Conf = append(v6Conf, ipamV6Conf)
 	}
-
 	// Initialize default network on "bridge" with the same name
 	_, err := controller.NewNetwork("bridge", "bridge",
 		libnetwork.NetworkOptionGeneric(options.Generic{
 			netlabel.GenericData: netOption,
 			netlabel.EnableIPv6:  config.Bridge.EnableIPv6,
 		}),
-		libnetwork.NetworkOptionPersist(false))
+		libnetwork.NetworkOptionIpam("default", "", v4Conf, v6Conf))
 	if err != nil {
 		return fmt.Errorf("Error creating default \"bridge\" network: %v", err)
 	}
@@ -455,7 +498,7 @@ func initBridgeDriver(controller libnetwork.NetworkController, config *Config) e
 //
 // This extra layer is used by all containers as the top-most ro layer. It protects
 // the container from unwanted side-effects on the rw layer.
-func setupInitLayer(initLayer string) error {
+func setupInitLayer(initLayer string, rootUID, rootGID int) error {
 	for pth, typ := range map[string]string{
 		"/dev/pts":         "dir",
 		"/dev/shm":         "dir",
@@ -478,12 +521,12 @@ func setupInitLayer(initLayer string) error {
 
 		if _, err := os.Stat(filepath.Join(initLayer, pth)); err != nil {
 			if os.IsNotExist(err) {
-				if err := system.MkdirAll(filepath.Join(initLayer, filepath.Dir(pth)), 0755); err != nil {
+				if err := idtools.MkdirAllAs(filepath.Join(initLayer, filepath.Dir(pth)), 0755, rootUID, rootGID); err != nil {
 					return err
 				}
 				switch typ {
 				case "dir":
-					if err := system.MkdirAll(filepath.Join(initLayer, pth), 0755); err != nil {
+					if err := idtools.MkdirAllAs(filepath.Join(initLayer, pth), 0755, rootUID, rootGID); err != nil {
 						return err
 					}
 				case "file":
@@ -492,6 +535,7 @@ func setupInitLayer(initLayer string) error {
 						return err
 					}
 					f.Close()
+					f.Chown(rootUID, rootGID)
 				default:
 					if err := os.Symlink(typ, filepath.Join(initLayer, pth)); err != nil {
 						return err
@@ -548,17 +592,31 @@ func (daemon *Daemon) registerLinks(container *Container, hostConfig *runconfig.
 	return nil
 }
 
-func (daemon *Daemon) newBaseContainer(id string) Container {
-	return Container{
+func (daemon *Daemon) newBaseContainer(id string) *Container {
+	return &Container{
 		CommonContainer: CommonContainer{
 			ID:           id,
 			State:        NewState(),
 			execCommands: newExecStore(),
 			root:         daemon.containerRoot(id),
+			MountPoints:  make(map[string]*volume.MountPoint),
 		},
-		MountPoints: make(map[string]*mountPoint),
-		Volumes:     make(map[string]string),
-		VolumesRW:   make(map[string]bool),
+		Volumes:   make(map[string]string),
+		VolumesRW: make(map[string]bool),
+	}
+}
+
+// conditionalMountOnStart is a platform specific helper function during the
+// container start to call mount.
+func (daemon *Daemon) conditionalMountOnStart(container *Container) error {
+	return daemon.Mount(container)
+}
+
+// conditionalUnmountOnCleanup is a platform specific helper function called
+// during the cleanup of a container to unmount.
+func (daemon *Daemon) conditionalUnmountOnCleanup(container *Container) {
+	if err := daemon.Unmount(container); err != nil {
+		logrus.Errorf("%v: Failed to umount filesystem: %v", container.ID, err)
 	}
 }
 

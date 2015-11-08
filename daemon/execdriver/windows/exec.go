@@ -18,6 +18,7 @@ func (d *Driver) Exec(c *execdriver.Command, processConfig *execdriver.ProcessCo
 		term     execdriver.Terminal
 		err      error
 		exitCode int32
+		errno    uint32
 	)
 
 	active := d.activeContainers[c.ID]
@@ -50,8 +51,15 @@ func (d *Driver) Exec(c *execdriver.Command, processConfig *execdriver.ProcessCo
 	logrus.Debugln("commandLine: ", createProcessParms.CommandLine)
 
 	// Start the command running in the container.
-	pid, stdin, stdout, stderr, err := hcsshim.CreateProcessInComputeSystem(c.ID, pipes.Stdin != nil, true, !processConfig.Tty, createProcessParms)
+	pid, stdin, stdout, stderr, rc, err := hcsshim.CreateProcessInComputeSystem(c.ID, pipes.Stdin != nil, true, !processConfig.Tty, createProcessParms)
 	if err != nil {
+		// TODO Windows: TP4 Workaround. In Hyper-V containers, there is a limitation
+		// of one exec per container. This should be fixed post TP4. CreateProcessInComputeSystem
+		// will return a specific error which we handle here to give a good error message
+		// back to the user instead of an inactionable "An invalid argument was supplied"
+		if rc == hcsshim.Win32InvalidArgument {
+			return -1, fmt.Errorf("The limit of docker execs per Hyper-V container has been exceeded")
+		}
 		logrus.Errorf("CreateProcessInComputeSystem() failed %s", err)
 		return -1, err
 	}
@@ -77,12 +85,15 @@ func (d *Driver) Exec(c *execdriver.Command, processConfig *execdriver.ProcessCo
 		hooks.Start(&c.ProcessConfig, int(pid), chOOM)
 	}
 
-	if exitCode, err = hcsshim.WaitForProcessInComputeSystem(c.ID, pid); err != nil {
-		logrus.Errorf("Failed to WaitForProcessInComputeSystem %s", err)
+	if exitCode, errno, err = hcsshim.WaitForProcessInComputeSystem(c.ID, pid, hcsshim.TimeoutInfinite); err != nil {
+		if errno == hcsshim.Win32PipeHasBeenEnded {
+			logrus.Debugf("Exiting Run() after WaitForProcessInComputeSystem failed with recognised error 0x%X", errno)
+			return hcsshim.WaitErrExecFailed, nil
+		}
+		logrus.Warnf("WaitForProcessInComputeSystem failed (container may have been killed): 0x%X %s", errno, err)
 		return -1, err
 	}
 
-	// TODO Windows - Do something with this exit code
-	logrus.Debugln("Exiting Run() with ExitCode 0", c.ID)
+	logrus.Debugln("Exiting Run()", c.ID)
 	return int(exitCode), nil
 }

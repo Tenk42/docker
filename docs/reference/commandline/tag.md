@@ -5,7 +5,6 @@ description = "The tag command description and usage"
 keywords = ["tag, name, image"]
 [menu.main]
 parent = "smn_cli"
-weight=1
 +++
 <![end-metadata]-->
 
@@ -19,4 +18,4 @@ weight=1
       --help=false         Print usage
 
 You can group your images together using names and tags, and then upload them
-to [*Share Images via Repositories*](/userguide/dockerrepos/#contributing-to-docker-hub).
+to [*Share Images via Repositories*](../../userguide/dockerrepos.md#contributing-to-docker-hub).

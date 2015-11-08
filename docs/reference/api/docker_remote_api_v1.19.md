@@ -15,8 +15,7 @@ weight = 2
 
  - The Remote API has replaced `rcli`.
  - The daemon listens on `unix:///var/run/docker.sock` but you can
-   [Bind Docker to another host/port or a Unix socket](
-   /articles/basics/#bind-docker-to-another-hostport-or-a-unix-socket).
+   [Bind Docker to another host/port or a Unix socket](../../articles/basics.md#bind-docker-to-another-hostport-or-a-unix-socket).
  - The API tends to be REST. However, for some complex commands, like `attach`
    or `pull`, the HTTP connection is hijacked to transport `stdout`,
    `stdin` and `stderr`.
@@ -141,7 +140,10 @@ Create a container
            "Tty": false,
            "OpenStdin": false,
            "StdinOnce": false,
-           "Env": null,
+           "Env": [
+                   "FOO=bar",
+                   "BAZ=quux"
+           ],
            "Cmd": [
                    "date"
            ],
@@ -169,6 +171,7 @@ Create a container
              "MemorySwap": 0,
              "CpuShares": 512,
              "CpuPeriod": 100000,
+             "CpuQuota": 50000,
              "CpusetCpus": "0,1",
              "CpusetMems": "0,1",
              "BlkioWeight": 300,
@@ -216,6 +219,7 @@ Json Parameters:
 -   **CpuShares** - An integer value containing the container's CPU Shares
       (ie. the relative weight vs other containers).
 -   **CpuPeriod** - The length of a CPU period in microseconds.
+-   **CpuQuota** - Microseconds of CPU time that the container can get in a CPU period.
 -   **Cpuset** - Deprecated please don't use. Use `CpusetCpus` instead. 
 -   **CpusetCpus** - String value containing the `cgroups CpusetCpus` to use.
 -   **CpusetMems** - Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
@@ -227,7 +231,7 @@ Json Parameters:
 -   **Tty** - Boolean value, Attach standard streams to a `tty`, including `stdin` if it is not closed.
 -   **OpenStdin** - Boolean value, opens stdin,
 -   **StdinOnce** - Boolean value, close `stdin` after the 1 attached client disconnects.
--   **Env** - A list of environment variables in the form of `VAR=value`
+-   **Env** - A list of environment variables in the form of `["VAR=value"[,"VAR2=value2"]]`
 -   **Labels** - Adds a map of labels to a container. To specify a map: `{"key":"value"[,"key2":"value2"]}`
 -   **Cmd** - Command to run specified as a string or an array of strings.
 -   **Entrypoint** - Set the entry point for the container as a string or an array
@@ -914,7 +918,7 @@ Status Codes:
 
     When using the TTY setting is enabled in
     [`POST /containers/create`
-    ](/reference/api/docker_remote_api_v1.9/#create-a-container "POST /containers/create"),
+    ](#create-a-container),
     the stream is the raw data from the process PTY and client's `stdin`.
     When the TTY is disabled, then the stream is multiplexed to separate
     `stdout` and `stderr`.
@@ -1192,7 +1196,7 @@ the path to the alternate build instructions file to use.
 
 The archive may include any number of other files,
 which are accessible in the build context (See the [*ADD build
-command*](/reference/builder/#dockerbuilder)).
+command*](../../reference/builder.md#dockerbuilder)).
 
 The build is canceled if the client drops the connection by quitting
 or being killed.
@@ -1219,6 +1223,8 @@ Query Parameters:
 -   **memswap** - Total memory (memory + swap), `-1` to disable swap.
 -   **cpushares** - CPU shares (relative weight).
 -   **cpusetcpus** - CPUs in which to allow execution (e.g., `0-3`, `0,1`).
+-   **cpuperiod** - The length of a CPU period in microseconds.
+-   **cpuquota** - Microseconds of CPU time that the container can get in a CPU period.
 
     Request Headers:
 

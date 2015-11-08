@@ -16,14 +16,16 @@ import (
 	"github.com/docker/docker/daemon/events"
 	"github.com/docker/docker/graph/tags"
 	"github.com/docker/docker/image"
+	"github.com/docker/docker/pkg/broadcaster"
 	"github.com/docker/docker/pkg/parsers"
-	"github.com/docker/docker/pkg/progressreader"
 	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/registry"
-	"github.com/docker/docker/trust"
 	"github.com/docker/docker/utils"
 	"github.com/docker/libtrust"
 )
+
+// ErrNameIsNotExist returned when there is no image with requested name.
+var ErrNameIsNotExist = errors.New("image with specified name does not exist")
 
 // TagStore manages repositories. It encompasses the Graph used for versioned
 // storage, as well as various services involved in pushing and pulling
@@ -37,11 +39,10 @@ type TagStore struct {
 	sync.Mutex
 	// FIXME: move push/pull-related fields
 	// to a helper type
-	pullingPool     map[string]*progressreader.Broadcaster
-	pushingPool     map[string]*progressreader.Broadcaster
+	pullingPool     map[string]*broadcaster.Buffered
+	pushingPool     map[string]*broadcaster.Buffered
 	registryService *registry.Service
 	eventsService   *events.Events
-	trustService    *trust.Store
 }
 
 // Repository maps tags to image IDs.
@@ -77,8 +78,6 @@ type TagStoreConfig struct {
 	Registry *registry.Service
 	// Events is the events service to use for logging.
 	Events *events.Events
-	// Trust is the trust service to use for push and pull operations.
-	Trust *trust.Store
 }
 
 // NewTagStore creates a new TagStore at specified path, using the parameters
@@ -94,11 +93,10 @@ func NewTagStore(path string, cfg *TagStoreConfig) (*TagStore, error) {
 		graph:           cfg.Graph,
 		trustKey:        cfg.Key,
 		Repositories:    make(map[string]Repository),
-		pullingPool:     make(map[string]*progressreader.Broadcaster),
-		pushingPool:     make(map[string]*progressreader.Broadcaster),
+		pullingPool:     make(map[string]*broadcaster.Buffered),
+		pushingPool:     make(map[string]*broadcaster.Buffered),
 		registryService: cfg.Registry,
 		eventsService:   cfg.Events,
-		trustService:    cfg.Trust,
 	}
 	// Load the json file if it exists, otherwise create it.
 	if err := store.reload(); os.IsNotExist(err) {
@@ -167,6 +165,26 @@ func (store *TagStore) LookupImage(name string) (*image.Image, error) {
 	}
 
 	return img, nil
+}
+
+// GetID returns ID for image name.
+func (store *TagStore) GetID(name string) (string, error) {
+	repoName, ref := parsers.ParseRepositoryTag(name)
+	if ref == "" {
+		ref = tags.DefaultTag
+	}
+	store.Lock()
+	defer store.Unlock()
+	repoName = registry.NormalizeLocalName(repoName)
+	repo, ok := store.Repositories[repoName]
+	if !ok {
+		return "", ErrNameIsNotExist
+	}
+	id, ok := repo[ref]
+	if !ok {
+		return "", ErrNameIsNotExist
+	}
+	return id, nil
 }
 
 // ByID returns a reverse-lookup table of all the names which refer to each
@@ -282,14 +300,7 @@ func (store *TagStore) setLoad(repoName, tag, imageName string, force bool, out 
 		return err
 	}
 	if err := tags.ValidateTagName(tag); err != nil {
-		if _, formatError := err.(tags.ErrTagInvalidFormat); !formatError {
-			return err
-		}
-		if _, dErr := digest.ParseDigest(tag); dErr != nil {
-			// Still return the tag validation error.
-			// It's more likely to be a user generated issue.
-			return err
-		}
+		return err
 	}
 	if err := store.reload(); err != nil {
 		return err
@@ -437,7 +448,7 @@ func validateDigest(dgst string) error {
 // poolAdd checks if a push or pull is already running, and returns
 // (broadcaster, true) if a running operation is found. Otherwise, it creates a
 // new one and returns (broadcaster, false).
-func (store *TagStore) poolAdd(kind, key string) (*progressreader.Broadcaster, bool) {
+func (store *TagStore) poolAdd(kind, key string) (*broadcaster.Buffered, bool) {
 	store.Lock()
 	defer store.Unlock()
 
@@ -448,7 +459,7 @@ func (store *TagStore) poolAdd(kind, key string) (*progressreader.Broadcaster, b
 		return p, true
 	}
 
-	broadcaster := progressreader.NewBroadcaster()
+	broadcaster := broadcaster.NewBuffered()
 
 	switch kind {
 	case "pull":

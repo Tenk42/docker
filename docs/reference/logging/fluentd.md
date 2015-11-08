@@ -39,7 +39,7 @@ Some options are supported by specifying `--log-opt` as many times as needed:
 Configure the default logging driver by passing the
 `--log-driver` option to the Docker daemon:
 
-    docker --log-driver=fluentd
+    docker daemon --log-driver=fluentd
 
 To set the logging driver for a specific container, pass the
 `--log-driver` option to `docker run`:
@@ -69,8 +69,13 @@ By default, the logging driver connects to `localhost:24224`. Supply the
 ### tag
 
 By default, Docker uses the first 12 characters of the container ID to tag log messages.
-Refer to the [log tag option documentation](/reference/logging/log_tags/) for customizing
+Refer to the [log tag option documentation](log_tags.md) for customizing
 the log tag format.
+
+
+### labels and env
+
+The `labels` and `env` options each take a comma-separated list of keys. If there is collision between `label` and `env` keys, the value of the `env` takes precedence. Both options add additional fields to the extra attributes of a logging message.
 
 
 ## Fluentd daemon management with Docker
@@ -92,7 +97,7 @@ aggregate store.
         <source>
           @type forward
         </source>
-    
+
         <match docker.**>
           @type stdout
         </match>

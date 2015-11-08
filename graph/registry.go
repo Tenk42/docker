@@ -10,13 +10,14 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/digest"
-	"github.com/docker/distribution/manifest"
+	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/distribution/registry/client"
 	"github.com/docker/distribution/registry/client/auth"
 	"github.com/docker/distribution/registry/client/transport"
 	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/registry"
 	"golang.org/x/net/context"
+	"strings"
 )
 
 type dumbCredentialStore struct {
@@ -57,9 +58,9 @@ func NewV2Repository(repoInfo *registry.RepositoryInfo, endpoint registry.APIEnd
 	authTransport := transport.NewTransport(base, modifiers...)
 	pingClient := &http.Client{
 		Transport: authTransport,
-		Timeout:   5 * time.Second,
+		Timeout:   15 * time.Second,
 	}
-	endpointStr := endpoint.URL + "/v2/"
+	endpointStr := strings.TrimRight(endpoint.URL, "/") + "/v2/"
 	req, err := http.NewRequest("GET", endpointStr, nil)
 	if err != nil {
 		return nil, err
@@ -99,11 +100,12 @@ func NewV2Repository(repoInfo *registry.RepositoryInfo, endpoint registry.APIEnd
 	return client.NewRepository(ctx, repoName, endpoint.URL, tr)
 }
 
-func digestFromManifest(m *manifest.SignedManifest, localName string) (digest.Digest, int, error) {
+func digestFromManifest(m *schema1.SignedManifest, localName string) (digest.Digest, int, error) {
 	payload, err := m.Payload()
 	if err != nil {
-		logrus.Debugf("could not retrieve manifest payload: %v", err)
-		return "", 0, err
+		// If this failed, the signatures section was corrupted
+		// or missing. Treat the entire manifest as the payload.
+		payload = m.Raw
 	}
 	manifestDigest, err := digest.FromBytes(payload)
 	if err != nil {

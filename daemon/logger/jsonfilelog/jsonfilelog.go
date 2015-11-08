@@ -28,7 +28,7 @@ import (
 const (
 	// Name is the name of the file that the jsonlogger logs to.
 	Name               = "json-file"
-	maxJSONDecodeRetry = 10
+	maxJSONDecodeRetry = 20000
 )
 
 // JSONFileLogger is Logger implementation for default Docker logging.
@@ -41,6 +41,7 @@ type JSONFileLogger struct {
 	ctx          logger.Context
 	readers      map[*logger.LogWatcher]struct{} // stores the active log followers
 	notifyRotate *pubsub.Publisher
+	extra        []byte // json-encoded extra attributes
 }
 
 func init() {
@@ -77,6 +78,16 @@ func New(ctx logger.Context) (logger.Logger, error) {
 			return nil, fmt.Errorf("max-file cannot be less than 1")
 		}
 	}
+
+	var extra []byte
+	if attrs := ctx.ExtraAttributes(nil); len(attrs) > 0 {
+		var err error
+		extra, err = json.Marshal(attrs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &JSONFileLogger{
 		f:            log,
 		buf:          bytes.NewBuffer(nil),
@@ -85,6 +96,7 @@ func New(ctx logger.Context) (logger.Logger, error) {
 		n:            maxFiles,
 		readers:      make(map[*logger.LogWatcher]struct{}),
 		notifyRotate: pubsub.NewPublisher(0, 1),
+		extra:        extra,
 	}, nil
 }
 
@@ -97,7 +109,12 @@ func (l *JSONFileLogger) Log(msg *logger.Message) error {
 	if err != nil {
 		return err
 	}
-	err = (&jsonlog.JSONLogs{Log: append(msg.Line, '\n'), Stream: msg.Source, Created: timestamp}).MarshalJSONBuf(l.buf)
+	err = (&jsonlog.JSONLogs{
+		Log:      append(msg.Line, '\n'),
+		Stream:   msg.Source,
+		Created:  timestamp,
+		RawAttrs: l.extra,
+	}).MarshalJSONBuf(l.buf)
 	if err != nil {
 		return err
 	}
@@ -181,6 +198,8 @@ func ValidateLogOpt(cfg map[string]string) error {
 		switch key {
 		case "max-file":
 		case "max-size":
+		case "labels":
+		case "env":
 		default:
 			return fmt.Errorf("unknown log opt '%s' for json-file log driver", key)
 		}
@@ -335,6 +354,17 @@ func followLogs(f *os.File, logWatcher *logger.LogWatcher, notifyRotate chan int
 				// try again because this shouldn't happen
 				if _, ok := err.(*json.SyntaxError); ok && retries <= maxJSONDecodeRetry {
 					dec = json.NewDecoder(f)
+					retries++
+					continue
+				}
+
+				// io.ErrUnexpectedEOF is returned from json.Decoder when there is
+				// remaining data in the parser's buffer while an io.EOF occurs.
+				// If the json logger writes a partial json log entry to the disk
+				// while at the same time the decoder tries to decode it, the race codition happens.
+				if err == io.ErrUnexpectedEOF && retries <= maxJSONDecodeRetry {
+					reader := io.MultiReader(dec.Buffered(), f)
+					dec = json.NewDecoder(reader)
 					retries++
 					continue
 				}

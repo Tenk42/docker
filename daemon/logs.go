@@ -7,6 +7,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/daemon/logger"
+	"github.com/docker/docker/daemon/logger/jsonfilelog"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -30,7 +31,12 @@ type ContainerLogsConfig struct {
 
 // ContainerLogs hooks up a container's stdout and stderr streams
 // configured with the given struct.
-func (daemon *Daemon) ContainerLogs(container *Container, config *ContainerLogsConfig) error {
+func (daemon *Daemon) ContainerLogs(containerName string, config *ContainerLogsConfig) error {
+	container, err := daemon.Get(containerName)
+	if err != nil {
+		return derr.ErrorCodeNoSuchContainer.WithArgs(containerName)
+	}
+
 	if !(config.UseStdout || config.UseStderr) {
 		return derr.ErrorCodeNeedStream
 	}
@@ -43,7 +49,7 @@ func (daemon *Daemon) ContainerLogs(container *Container, config *ContainerLogsC
 	}
 	config.OutStream = outStream
 
-	cLog, err := container.getLogger()
+	cLog, err := daemon.getLogger(container)
 	if err != nil {
 		return err
 	}
@@ -91,4 +97,43 @@ func (daemon *Daemon) ContainerLogs(container *Container, config *ContainerLogsC
 			}
 		}
 	}
+}
+
+func (daemon *Daemon) getLogger(container *Container) (logger.Logger, error) {
+	if container.logDriver != nil && container.IsRunning() {
+		return container.logDriver, nil
+	}
+	cfg := container.getLogConfig(daemon.defaultLogConfig)
+	if err := logger.ValidateLogOpts(cfg.Type, cfg.Config); err != nil {
+		return nil, err
+	}
+	return container.StartLogger(cfg)
+}
+
+// StartLogging initializes and starts the container logging stream.
+func (daemon *Daemon) StartLogging(container *Container) error {
+	cfg := container.getLogConfig(daemon.defaultLogConfig)
+	if cfg.Type == "none" {
+		return nil // do not start logging routines
+	}
+
+	if err := logger.ValidateLogOpts(cfg.Type, cfg.Config); err != nil {
+		return err
+	}
+	l, err := container.StartLogger(cfg)
+	if err != nil {
+		return derr.ErrorCodeInitLogger.WithArgs(err)
+	}
+
+	copier := logger.NewCopier(container.ID, map[string]io.Reader{"stdout": container.StdoutPipe(), "stderr": container.StderrPipe()}, l)
+	container.logCopier = copier
+	copier.Run()
+	container.logDriver = l
+
+	// set LogPath field only for json-file logdriver
+	if jl, ok := l.(*jsonfilelog.JSONFileLogger); ok {
+		container.LogPath = jl.LogPath()
+	}
+
+	return nil
 }

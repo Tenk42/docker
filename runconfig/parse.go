@@ -12,11 +12,18 @@ import (
 	"github.com/docker/docker/pkg/signal"
 	"github.com/docker/docker/pkg/stringutils"
 	"github.com/docker/docker/pkg/units"
+	"github.com/docker/docker/volume"
 )
 
 var (
 	// ErrConflictContainerNetworkAndLinks conflict between --net=container and links
 	ErrConflictContainerNetworkAndLinks = fmt.Errorf("Conflicting options: --net=container can't be used with links. This would result in undefined behavior")
+	// ErrConflictUserDefinedNetworkAndLinks conflict between --net=<NETWORK> and links
+	ErrConflictUserDefinedNetworkAndLinks = fmt.Errorf("Conflicting options: --net=<NETWORK> can't be used with links. This would result in undefined behavior")
+	// ErrConflictSharedNetwork conflict between private and other networks
+	ErrConflictSharedNetwork = fmt.Errorf("Container sharing network namespace with another container or host cannot be connected to any other network")
+	// ErrConflictNoNetwork conflict between private and other networks
+	ErrConflictNoNetwork = fmt.Errorf("Container cannot be connected to multiple networks with one of the networks in --none mode")
 	// ErrConflictNetworkAndDNS conflict between --dns and the network mode
 	ErrConflictNetworkAndDNS = fmt.Errorf("Conflicting options: --dns and the network mode (--net)")
 	// ErrConflictNetworkHostname conflict between the hostname and the network mode
@@ -40,7 +47,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	var (
 		// FIXME: use utils.ListOpts for attach and volumes?
 		flAttach  = opts.NewListOpts(opts.ValidateAttach)
-		flVolumes = opts.NewListOpts(opts.ValidatePath)
+		flVolumes = opts.NewListOpts(nil)
 		flLinks   = opts.NewListOpts(opts.ValidateLink)
 		flEnv     = opts.NewListOpts(opts.ValidateEnv)
 		flLabels  = opts.NewListOpts(opts.ValidateEnv)
@@ -48,22 +55,20 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 
 		flUlimits = opts.NewUlimitOpt(nil)
 
-		flPublish     = opts.NewListOpts(nil)
-		flExpose      = opts.NewListOpts(nil)
-		flDNS         = opts.NewListOpts(opts.ValidateIPAddress)
-		flDNSSearch   = opts.NewListOpts(opts.ValidateDNSSearch)
-		flDNSOptions  = opts.NewListOpts(nil)
-		flExtraHosts  = opts.NewListOpts(opts.ValidateExtraHost)
-		flVolumesFrom = opts.NewListOpts(nil)
-		flLxcOpts     = opts.NewListOpts(nil)
-		flEnvFile     = opts.NewListOpts(nil)
-		flCapAdd      = opts.NewListOpts(nil)
-		flCapDrop     = opts.NewListOpts(nil)
-		flGroupAdd    = opts.NewListOpts(nil)
-		flSecurityOpt = opts.NewListOpts(nil)
-		flLabelsFile  = opts.NewListOpts(nil)
-		flLoggingOpts = opts.NewListOpts(nil)
-
+		flPublish           = opts.NewListOpts(nil)
+		flExpose            = opts.NewListOpts(nil)
+		flDNS               = opts.NewListOpts(opts.ValidateIPAddress)
+		flDNSSearch         = opts.NewListOpts(opts.ValidateDNSSearch)
+		flDNSOptions        = opts.NewListOpts(nil)
+		flExtraHosts        = opts.NewListOpts(opts.ValidateExtraHost)
+		flVolumesFrom       = opts.NewListOpts(nil)
+		flEnvFile           = opts.NewListOpts(nil)
+		flCapAdd            = opts.NewListOpts(nil)
+		flCapDrop           = opts.NewListOpts(nil)
+		flGroupAdd          = opts.NewListOpts(nil)
+		flSecurityOpt       = opts.NewListOpts(nil)
+		flLabelsFile        = opts.NewListOpts(nil)
+		flLoggingOpts       = opts.NewListOpts(nil)
 		flNetwork           = cmd.Bool([]string{"#n", "#-networking"}, true, "Enable networking for this container")
 		flPrivileged        = cmd.Bool([]string{"#privileged", "-privileged"}, false, "Give extended privileges to this container")
 		flPidMode           = cmd.String([]string{"-pid"}, "", "PID namespace to use")
@@ -86,9 +91,9 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		flCPUQuota          = cmd.Int64([]string{"-cpu-quota"}, 0, "Limit CPU CFS (Completely Fair Scheduler) quota")
 		flCpusetCpus        = cmd.String([]string{"#-cpuset", "-cpuset-cpus"}, "", "CPUs in which to allow execution (0-3, 0,1)")
 		flCpusetMems        = cmd.String([]string{"-cpuset-mems"}, "", "MEMs in which to allow execution (0-3, 0,1)")
-		flBlkioWeight       = cmd.Int64([]string{"-blkio-weight"}, 0, "Block IO (relative weight), between 10 and 1000")
+		flBlkioWeight       = cmd.Uint16([]string{"-blkio-weight"}, 0, "Block IO (relative weight), between 10 and 1000")
 		flSwappiness        = cmd.Int64([]string{"-memory-swappiness"}, -1, "Tuning container memory swappiness (0 to 100)")
-		flNetMode           = cmd.String([]string{"-net"}, "default", "Set the Network mode for the container")
+		flNetMode           = cmd.String([]string{"-net"}, "default", "Set the Network for the container")
 		flMacAddress        = cmd.String([]string{"-mac-address"}, "", "Container MAC address (e.g. 92:d0:c6:0a:29:33)")
 		flIpcMode           = cmd.String([]string{"-ipc"}, "", "IPC namespace to use")
 		flRestartPolicy     = cmd.String([]string{"-restart"}, "no", "Restart policy to apply when a container exits")
@@ -97,6 +102,7 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		flCgroupParent      = cmd.String([]string{"-cgroup-parent"}, "", "Optional parent cgroup for the container")
 		flVolumeDriver      = cmd.String([]string{"-volume-driver"}, "", "Optional volume driver for the container")
 		flStopSignal        = cmd.String([]string{"-stop-signal"}, signal.DefaultStopSignal, fmt.Sprintf("Signal to stop a container, %v by default", signal.DefaultStopSignal))
+		flIsolation         = cmd.String([]string{"-isolation"}, "", "Container isolation level")
 	)
 
 	cmd.Var(&flAttach, []string{"a", "-attach"}, "Attach to STDIN, STDOUT or STDERR")
@@ -114,15 +120,12 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	cmd.Var(&flDNSOptions, []string{"-dns-opt"}, "Set DNS options")
 	cmd.Var(&flExtraHosts, []string{"-add-host"}, "Add a custom host-to-IP mapping (host:ip)")
 	cmd.Var(&flVolumesFrom, []string{"#volumes-from", "-volumes-from"}, "Mount volumes from the specified container(s)")
-	cmd.Var(&flLxcOpts, []string{"#lxc-conf", "-lxc-conf"}, "Add custom lxc options")
 	cmd.Var(&flCapAdd, []string{"-cap-add"}, "Add Linux capabilities")
 	cmd.Var(&flCapDrop, []string{"-cap-drop"}, "Drop Linux capabilities")
 	cmd.Var(&flGroupAdd, []string{"-group-add"}, "Add additional groups to join")
 	cmd.Var(&flSecurityOpt, []string{"-security-opt"}, "Security Options")
 	cmd.Var(flUlimits, []string{"-ulimit"}, "Ulimit options")
 	cmd.Var(&flLoggingOpts, []string{"-log-opt"}, "Log driver options")
-
-	expFlags := attachExperimentalFlags(cmd)
 
 	cmd.Require(flag.Min, 1)
 
@@ -197,16 +200,11 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	var binds []string
 	// add any bind targets to the list of container volumes
 	for bind := range flVolumes.GetMap() {
-		if arr := strings.Split(bind, ":"); len(arr) > 1 {
-			if arr[1] == "/" {
-				return nil, nil, cmd, fmt.Errorf("Invalid bind mount: destination can't be '/'")
-			}
+		if arr := volume.SplitN(bind, 2); len(arr) > 1 {
 			// after creating the bind mount we want to delete it from the flVolumes values because
 			// we do not want bind mounts being committed to image configs
 			binds = append(binds, bind)
 			flVolumes.Delete(bind)
-		} else if bind == "/" {
-			return nil, nil, cmd, fmt.Errorf("Invalid volume: path can't be '/'")
 		}
 	}
 
@@ -222,12 +220,6 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	if *flEntrypoint != "" {
 		entrypoint = stringutils.NewStrSlice(*flEntrypoint)
 	}
-
-	lc, err := parseKeyValueOpts(flLxcOpts)
-	if err != nil {
-		return nil, nil, cmd, err
-	}
-	lxcConf := NewLxcConfig(lc)
 
 	var (
 		domainname string
@@ -340,7 +332,6 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 	hostConfig := &HostConfig{
 		Binds:             binds,
 		ContainerIDFile:   *flContainerIDFile,
-		LxcConf:           lxcConf,
 		Memory:            flMemory,
 		MemoryReservation: MemoryReservation,
 		MemorySwap:        memorySwap,
@@ -377,9 +368,8 @@ func Parse(cmd *flag.FlagSet, args []string) (*Config, *HostConfig, *flag.FlagSe
 		LogConfig:         LogConfig{Type: *flLoggingDriver, Config: loggingOpts},
 		CgroupParent:      *flCgroupParent,
 		VolumeDriver:      *flVolumeDriver,
+		Isolation:         IsolationLevel(*flIsolation),
 	}
-
-	applyExperimentalFlags(expFlags, config, hostConfig)
 
 	// When allocating stdin in attached mode, close stdin at client disconnect
 	if config.OpenStdin && config.AttachStdin {

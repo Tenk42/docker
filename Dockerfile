@@ -72,23 +72,11 @@ RUN cd /usr/local/lvm2 \
 	&& make install_device-mapper
 # see https://git.fedorahosted.org/cgit/lvm2.git/tree/INSTALL
 
-# Install lxc
-ENV LXC_VERSION 1.1.2
-RUN mkdir -p /usr/src/lxc \
-	&& curl -sSL https://linuxcontainers.org/downloads/lxc/lxc-${LXC_VERSION}.tar.gz | tar -v -C /usr/src/lxc/ -xz --strip-components=1
-RUN cd /usr/src/lxc \
-	&& ./configure \
-	&& make \
-	&& make install \
-	&& ldconfig
-
 # Install Go
-ENV GO_VERSION 1.4.3
-RUN curl -sSL https://golang.org/dl/go${GO_VERSION}.src.tar.gz | tar -v -C /usr/local -xz \
-	&& mkdir -p /go/bin
+ENV GO_VERSION 1.5.1
+RUN curl -sSL  "https://storage.googleapis.com/golang/go${GO_VERSION}.linux-amd64.tar.gz" | tar -v -C /usr/local -xz
 ENV PATH /go/bin:/usr/local/go/bin:$PATH
 ENV GOPATH /go:/go/src/github.com/docker/docker/vendor
-RUN cd /usr/local/go/src && ./make.bash --no-clean 2>&1
 
 # Compile Go for cross compilation
 ENV DOCKER_CROSSPLATFORMS \
@@ -99,20 +87,12 @@ ENV DOCKER_CROSSPLATFORMS \
 
 # (set an explicit GOARM of 5 for maximum compatibility)
 ENV GOARM 5
-RUN cd /usr/local/go/src \
-	&& set -x \
-	&& for platform in $DOCKER_CROSSPLATFORMS; do \
-		GOOS=${platform%/*} \
-		GOARCH=${platform##*/} \
-			./make.bash --no-clean 2>&1; \
-	done
 
 # This has been commented out and kept as reference because we don't support compiling with older Go anymore.
 # ENV GOFMT_VERSION 1.3.3
 # RUN curl -sSL https://storage.googleapis.com/golang/go${GOFMT_VERSION}.$(go env GOOS)-$(go env GOARCH).tar.gz | tar -C /go/bin -xz --strip-components=2 go/bin/gofmt
 
-# Update this sha when we upgrade to go 1.5.0
-ENV GO_TOOLS_COMMIT 069d2f3bcb68257b627205f0486d6cc69a231ff9
+ENV GO_TOOLS_COMMIT 823804e1ae08dbb14eb807afc7db9993bc9e3cc3
 # Grab Go's cover tool for dead-simple code coverage testing
 # Grab Go's vet tool for examining go code to find suspicious constructs
 # and help prevent errors that the compiler might not catch
@@ -121,7 +101,7 @@ RUN git clone https://github.com/golang/tools.git /go/src/golang.org/x/tools \
 	&& go install -v golang.org/x/tools/cmd/cover \
 	&& go install -v golang.org/x/tools/cmd/vet
 # Grab Go's lint tool
-ENV GO_LINT_COMMIT f42f5c1c440621302702cb0741e9d2ca547ae80f
+ENV GO_LINT_COMMIT 32a87160691b3c96046c0c678fe57c5bef761456
 RUN git clone https://github.com/golang/lint.git /go/src/github.com/golang/lint \
 	&& (cd /go/src/github.com/golang/lint && git checkout -q $GO_LINT_COMMIT) \
 	&& go install -v github.com/golang/lint/golint
@@ -150,10 +130,11 @@ RUN set -x \
 	&& rm -rf "$GOPATH"
 
 # Get the "docker-py" source so we can run their integration tests
-ENV DOCKER_PY_COMMIT 139850f3f3b17357bab5ba3edfb745fb14043764
+ENV DOCKER_PY_COMMIT 47ab89ec2bd3bddf1221b856ffbaff333edeabb4
 RUN git clone https://github.com/docker/docker-py.git /docker-py \
 	&& cd /docker-py \
-	&& git checkout -q $DOCKER_PY_COMMIT
+	&& git checkout -q $DOCKER_PY_COMMIT \
+	&& pip install -r test-requirements.txt
 
 # Setup s3cmd config
 RUN { \
@@ -182,7 +163,7 @@ RUN ln -sv $PWD/contrib/completion/bash/docker /etc/bash_completion.d/docker
 # Get useful and necessary Hub images so we can "docker load" locally instead of pulling
 COPY contrib/download-frozen-image.sh /go/src/github.com/docker/docker/contrib/
 RUN ./contrib/download-frozen-image.sh /docker-frozen-images \
-	busybox:latest@8c2e06607696bd4afb3d03b687e361cc43cf8ec1a4a725bc96e39f05ba97dd55 \
+	busybox:latest@d7057cb020844f245031d27b76cb18af05db1cc3a96a29fa7777af75f5ac91a3 \
 	hello-world:frozen@91c95931e552b11604fea91c2f537284149ec32fff0f700a4769cfd31d7696ae \
 	jess/unshare@5c9f6ea50341a2a8eb6677527f2bdedbf331ae894a41714fda770fb130f3314d
 # see also "hack/make/.ensure-frozen-images" (which needs to be updated any time this list is)

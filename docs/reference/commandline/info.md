@@ -5,7 +5,6 @@ description = "The info command description and usage"
 keywords = ["display, docker, information"]
 [menu.main]
 parent = "smn_cli"
-weight=1
 +++
 <![end-metadata]-->
 
@@ -23,7 +22,7 @@ For example:
     $ docker -D info
     Containers: 14
     Images: 52
-    Engine Version: 1.9.0
+    Server Version: 1.9.0
     Storage Driver: aufs
      Root Dir: /var/lib/docker/aufs
      Backing Filesystem: extfs
@@ -57,5 +56,3 @@ The global `-D` option tells all `docker` commands to output debug information.
 
 When sending issue reports, please use `docker version` and `docker -D info` to
 ensure we know how your setup is configured.
-
-

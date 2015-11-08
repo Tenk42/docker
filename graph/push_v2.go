@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"bufio"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -9,6 +11,7 @@ import (
 	"github.com/docker/distribution"
 	"github.com/docker/distribution/digest"
 	"github.com/docker/distribution/manifest"
+	"github.com/docker/distribution/manifest/schema1"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/pkg/progressreader"
 	"github.com/docker/docker/pkg/streamformatter"
@@ -18,6 +21,8 @@ import (
 	"github.com/docker/docker/utils"
 	"golang.org/x/net/context"
 )
+
+const compressionBufSize = 32768
 
 type v2Pusher struct {
 	*TagStore
@@ -99,15 +104,15 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 		return err
 	}
 
-	m := &manifest.Manifest{
+	m := &schema1.Manifest{
 		Versioned: manifest.Versioned{
 			SchemaVersion: 1,
 		},
 		Name:         p.repo.Name(),
 		Tag:          tag,
 		Architecture: layer.Architecture,
-		FSLayers:     []manifest.FSLayer{},
-		History:      []manifest.History{},
+		FSLayers:     []schema1.FSLayer{},
+		History:      []schema1.History{},
 	}
 
 	var metadata runconfig.Config
@@ -138,13 +143,8 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 			}
 		}
 
-		jsonData, err := p.graph.RawJSON(layer.ID)
-		if err != nil {
-			return fmt.Errorf("cannot retrieve the path for %s: %s", layer.ID, err)
-		}
-
 		var exists bool
-		dgst, err := p.graph.GetDigest(layer.ID)
+		dgst, err := p.graph.GetLayerDigest(layer.ID)
 		switch err {
 		case nil:
 			if p.layersPushed[dgst] {
@@ -174,26 +174,34 @@ func (p *v2Pusher) pushV2Tag(tag string) error {
 		// if digest was empty or not saved, or if blob does not exist on the remote repository,
 		// then fetch it.
 		if !exists {
-			if pushDigest, err := p.pushV2Image(p.repo.Blobs(context.Background()), layer); err != nil {
+			var pushDigest digest.Digest
+			if pushDigest, err = p.pushV2Image(p.repo.Blobs(context.Background()), layer); err != nil {
 				return err
-			} else if pushDigest != dgst {
+			}
+			if dgst == "" {
 				// Cache new checksum
-				if err := p.graph.SetDigest(layer.ID, pushDigest); err != nil {
+				if err := p.graph.SetLayerDigest(layer.ID, pushDigest); err != nil {
 					return err
 				}
-				dgst = pushDigest
 			}
+			dgst = pushDigest
 		}
 
-		m.FSLayers = append(m.FSLayers, manifest.FSLayer{BlobSum: dgst})
-		m.History = append(m.History, manifest.History{V1Compatibility: string(jsonData)})
+		// read v1Compatibility config, generate new if needed
+		jsonData, err := p.graph.GenerateV1CompatibilityChain(layer.ID)
+		if err != nil {
+			return err
+		}
+
+		m.FSLayers = append(m.FSLayers, schema1.FSLayer{BlobSum: dgst})
+		m.History = append(m.History, schema1.History{V1Compatibility: string(jsonData)})
 
 		layersSeen[layer.ID] = true
 		p.layersPushed[dgst] = true
 	}
 
 	logrus.Infof("Signed manifest for %s:%s using daemon's key: %s", p.repo.Name(), tag, p.trustKey.KeyID())
-	signed, err := manifest.Sign(m, p.trustKey)
+	signed, err := schema1.Sign(m, p.trustKey)
 	if err != nil {
 		return err
 	}
@@ -235,11 +243,8 @@ func (p *v2Pusher) pushV2Image(bs distribution.BlobService, img *image.Image) (d
 	}
 	defer layerUpload.Close()
 
-	digester := digest.Canonical.New()
-	tee := io.TeeReader(arch, digester.Hash())
-
 	reader := progressreader.New(progressreader.Config{
-		In:        ioutil.NopCloser(tee), // we'll take care of close here.
+		In:        ioutil.NopCloser(arch), // we'll take care of close here.
 		Out:       out,
 		Formatter: p.sf,
 
@@ -253,8 +258,33 @@ func (p *v2Pusher) pushV2Image(bs distribution.BlobService, img *image.Image) (d
 		Action:   "Pushing",
 	})
 
+	digester := digest.Canonical.New()
+	// HACK: The MultiWriter doesn't write directly to layerUpload because
+	// we must make sure the ReadFrom is used, not Write. Using Write would
+	// send a PATCH request for every Write call.
+	pipeReader, pipeWriter := io.Pipe()
+	// Use a bufio.Writer to avoid excessive chunking in HTTP request.
+	bufWriter := bufio.NewWriterSize(io.MultiWriter(pipeWriter, digester.Hash()), compressionBufSize)
+	compressor := gzip.NewWriter(bufWriter)
+
+	go func() {
+		_, err := io.Copy(compressor, reader)
+		if err == nil {
+			err = compressor.Close()
+		}
+		if err == nil {
+			err = bufWriter.Flush()
+		}
+		if err != nil {
+			pipeWriter.CloseWithError(err)
+		} else {
+			pipeWriter.Close()
+		}
+	}()
+
 	out.Write(p.sf.FormatProgress(stringid.TruncateID(img.ID), "Pushing", nil))
-	nn, err := io.Copy(layerUpload, reader)
+	nn, err := layerUpload.ReadFrom(pipeReader)
+	pipeReader.Close()
 	if err != nil {
 		return "", err
 	}

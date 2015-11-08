@@ -9,7 +9,7 @@ docker-create - Create a new container
 [**-a**|**--attach**[=*[]*]]
 [**--add-host**[=*[]*]]
 [**--blkio-weight**[=*[BLKIO-WEIGHT]*]]
-[**-c**|**--cpu-shares**[=*0*]]
+[**--cpu-shares**[=*0*]]
 [**--cap-add**[=*[]*]]
 [**--cap-drop**[=*[]*]]
 [**--cgroup-parent**[=*CGROUP-PATH*]]
@@ -37,7 +37,6 @@ docker-create - Create a new container
 [**--link**[=*[]*]]
 [**--log-driver**[=*[]*]]
 [**--log-opt**[=*[]*]]
-[**--lxc-conf**[=*[]*]]
 [**-m**|**--memory**[=*MEMORY*]]
 [**--mac-address**[=*MAC-ADDRESS*]]
 [**--memory-reservation**[=*MEMORY-RESERVATION*]]
@@ -83,7 +82,7 @@ The initial status of the container created with **docker create** is 'created'.
 **--blkio-weight**=0
    Block IO weight (relative weight) accepts a weight value between 10 and 1000.
 
-**-c**, **--cpu-shares**=0
+**--cpu-shares**=0
    CPU shares (relative weight)
 
 **--cap-add**=[]
@@ -174,16 +173,13 @@ millions of trillions.
    Add link to another container in the form of <name or id>:alias or just
    <name or id> in which case the alias will match the name.
 
-**--log-driver**="|*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*none*"
+**--log-driver**="|*json-file*|*syslog*|*journald*|*gelf*|*fluentd*|*awslogs*|*splunk*|*none*"
   Logging driver for container. Default is defined by daemon `--log-driver` flag.
   **Warning**: the `docker logs` command works only for the `json-file` and
   `journald` logging drivers.
 
 **--log-opt**=[]
   Logging driver specific options.
-
-**--lxc-conf**=[]
-   (lxc exec-driver only) Add custom lxc options --lxc-conf="lxc.cgroup.cpuset.cpus = 0,1"
 
 **-m**, **--memory**=""
    Memory limit (format: <number>[<unit>], where unit = b, k, m or g)

@@ -71,6 +71,7 @@ func NewDaemonCli() *DaemonCli {
 	// TODO(tiborvass): remove InstallFlags?
 	daemonConfig := new(daemon.Config)
 	daemonConfig.LogConfig.Config = make(map[string]string)
+	daemonConfig.ClusterOpts = make(map[string]string)
 	daemonConfig.InstallFlags(daemonFlags, presentInHelp)
 	daemonConfig.InstallFlags(flag.CommandLine, absentFromHelp)
 	registryOptions := new(registry.Options)
@@ -169,9 +170,6 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	daemonFlags.ParseFlags(args, true)
 	commonFlags.PostParse()
 
-	if len(commonFlags.Hosts) == 0 {
-		commonFlags.Hosts = []string{opts.DefaultHost}
-	}
 	if commonFlags.TrustKey == "" {
 		commonFlags.TrustKey = filepath.Join(getDaemonConfDir(), defaultTrustKeyFile)
 	}
@@ -212,6 +210,7 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	}
 	serverConfig = setPlatformServerConfig(serverConfig, cli.Config)
 
+	defaultHost := opts.DefaultHost
 	if commonFlags.TLSOptions != nil {
 		if !commonFlags.TLSOptions.InsecureSkipVerify {
 			// server requires and verifies client's certificate
@@ -222,6 +221,17 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 			logrus.Fatal(err)
 		}
 		serverConfig.TLSConfig = tlsConfig
+		defaultHost = opts.DefaultTLSHost
+	}
+
+	if len(commonFlags.Hosts) == 0 {
+		commonFlags.Hosts = make([]string, 1)
+	}
+	for i := 0; i < len(commonFlags.Hosts); i++ {
+		var err error
+		if commonFlags.Hosts[i], err = opts.ParseHost(defaultHost, commonFlags.Hosts[i]); err != nil {
+			logrus.Fatalf("error parsing -H %s : %v", commonFlags.Hosts[i], err)
+		}
 	}
 	for _, protoAddr := range commonFlags.Hosts {
 		protoAddrParts := strings.SplitN(protoAddr, "://", 2)
@@ -234,6 +244,21 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	if err != nil {
 		logrus.Fatal(err)
 	}
+
+	// The serve API routine never exits unless an error occurs
+	// We need to start it as a goroutine and wait on it so
+	// daemon doesn't exit
+	// All servers must be protected with some mechanism (systemd socket, listenbuffer)
+	// which prevents real handling of request until routes will be set.
+	serveAPIWait := make(chan error)
+	go func() {
+		if err := api.ServeAPI(); err != nil {
+			logrus.Errorf("ServeAPI error: %v", err)
+			serveAPIWait <- err
+			return
+		}
+		serveAPIWait <- nil
+	}()
 
 	if err := migrateKey(); err != nil {
 		logrus.Fatal(err)
@@ -261,19 +286,6 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	}).Info("Docker daemon")
 
 	api.InitRouters(d)
-
-	// The serve API routine never exits unless an error occurs
-	// We need to start it as a goroutine and wait on it so
-	// daemon doesn't exit
-	serveAPIWait := make(chan error)
-	go func() {
-		if err := api.ServeAPI(); err != nil {
-			logrus.Errorf("ServeAPI error: %v", err)
-			serveAPIWait <- err
-			return
-		}
-		serveAPIWait <- nil
-	}()
 
 	signal.Trap(func() {
 		api.Close()

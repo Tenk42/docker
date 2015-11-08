@@ -5,7 +5,6 @@ description = "The export command description and usage"
 keywords = ["export, file, system, container"]
 [menu.main]
 parent = "smn_cli"
-weight=1
 +++
 <![end-metadata]-->
 
@@ -24,7 +23,7 @@ the container, `docker export` will export the contents of the *underlying*
 directory, not the contents of the volume.
 
 Refer to [Backup, restore, or migrate data
-volumes](/userguide/dockervolumes/#backup-restore-or-migrate-data-volumes) in
+volumes](../../userguide/dockervolumes.md#backup-restore-or-migrate-data-volumes) in
 the user guide for examples on exporting data in a volume.
 
 ## Examples

@@ -5,11 +5,9 @@ import (
 
 	"golang.org/x/net/context"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/server/httputils"
 	dkrouter "github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/daemon"
-	"github.com/gorilla/mux"
 )
 
 // router is a docker router that talks with the local docker daemon.
@@ -31,11 +29,14 @@ func (l localRoute) Handler() httputils.APIFunc {
 	return l.handler
 }
 
-// Register adds the filtered handler to the mux.
-func (l localRoute) Register(m *mux.Router, handler http.Handler) {
-	logrus.Debugf("Registering %s, %s", l.method, l.path)
-	m.Path(dkrouter.VersionMatcher + l.path).Methods(l.method).Handler(handler)
-	m.Path(l.path).Methods(l.method).Handler(handler)
+// Method returns the http method that the route responds to.
+func (l localRoute) Method() string {
+	return l.method
+}
+
+// Path returns the subpath where the route responds to.
+func (l localRoute) Path() string {
+	return l.path
 }
 
 // NewRoute initialies a new local route for the reouter
@@ -115,8 +116,6 @@ func (r *router) initRoutes() {
 		NewGetRoute("/containers/{name:.*}/attach/ws", r.wsContainersAttach),
 		NewGetRoute("/exec/{id:.*}/json", r.getExecByID),
 		NewGetRoute("/containers/{name:.*}/archive", r.getContainersArchive),
-		NewGetRoute("/volumes", r.getVolumesList),
-		NewGetRoute("/volumes/{name:.*}", r.getVolumeByName),
 		// POST
 		NewPostRoute("/auth", r.postAuth),
 		NewPostRoute("/commit", r.postCommit),
@@ -140,13 +139,11 @@ func (r *router) initRoutes() {
 		NewPostRoute("/exec/{name:.*}/start", r.postContainerExecStart),
 		NewPostRoute("/exec/{name:.*}/resize", r.postContainerExecResize),
 		NewPostRoute("/containers/{name:.*}/rename", r.postContainerRename),
-		NewPostRoute("/volumes", r.postVolumesCreate),
 		// PUT
 		NewPutRoute("/containers/{name:.*}/archive", r.putContainersArchive),
 		// DELETE
 		NewDeleteRoute("/containers/{name:.*}", r.deleteContainers),
 		NewDeleteRoute("/images/{name:.*}", r.deleteImages),
-		NewDeleteRoute("/volumes/{name:.*}", r.deleteVolumes),
 	}
 }
 

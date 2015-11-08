@@ -49,13 +49,13 @@ your `apt` sources to the new Docker repository.
 Docker's `apt` repository contains Docker 1.7.1 and higher. To set `apt` to use
 packages from the new repository:
 
-1. If you haven't already done so, log into your Ubuntu instance.
+1. If you haven't already done so, log into your Ubuntu instance as a privileged user.
 
 2. Open a terminal window.
 
 3. Add the new `gpg` key.
 
-        $ apt-key adv --keyserver hkp://pgp.mit.edu:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
+        $ sudo apt-key adv --keyserver hkp://pgp.mit.edu:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
 
 4. Open the `/etc/apt/sources.list.d/docker.list` file in your favorite editor.
 
@@ -67,13 +67,13 @@ packages from the new repository:
 
     The possible entries are:
 
-        # Ubuntu Precise
+        # Ubuntu Precise 12.04 (LTS)
         deb https://apt.dockerproject.org/repo ubuntu-precise main
-        # Ubuntu Trusty
+        # Ubuntu Trusty 14.04 (LTS)
         deb https://apt.dockerproject.org/repo ubuntu-trusty main
-        # Ubuntu Vivid
+        # Ubuntu Vivid 15.04
         deb https://apt.dockerproject.org/repo ubuntu-vivid main
-        # Ubuntu Wily
+        # Ubuntu Wily 15.10
         deb https://apt.dockerproject.org/repo ubuntu-wily main
 
 7. Save and close the `/etc/apt/sources.list.d/docker.list` file.
@@ -94,11 +94,30 @@ packages from the new repository:
 
 ### Prerequisites by Ubuntu Version
 
-The following Ubuntu versions have no additional prerequisites:
-
 - Ubuntu Wily 15.10
 - Ubuntu Vivid 15.04
 - Ubuntu Trusty 14.04 (LTS)
+
+For Ubuntu Trusty, Vivid, and Wily, it's recommended to install the
+`linux-image-extra` kernel package. The `linux-image-extra` package
+allows you use the `aufs` storage driver.
+
+To install the `linux-image-extra` package for your kernel version:
+
+1. Open a terminal on your Ubuntu host.
+
+2. Update your package manager.
+
+        $ sudo apt-get update
+
+3. Install the recommended package.
+
+        $ sudo apt-get install linux-image-extra-$(uname -r)
+
+4. Go ahead and install Docker.
+
+
+#### Ubuntu Precise 12.04 (LTS)
 
 For Ubuntu Precise, Docker requires the 3.13 kernel version. If your kernel
 version is older than 3.13, you must upgrade it. Refer to this table to see
@@ -197,7 +216,7 @@ makes the ownership of the Unix socket read/writable by the `docker` group.
 
 >**Warning**: The `docker` group is equivalent to the `root` user; For details
 >on how this impacts security in your system, see [*Docker Daemon Attack
->Surface*](/articles/security/#docker-daemon-attack-surface) for details.
+>Surface*](../articles/security.md#docker-daemon-attack-surface) for details.
 
 To create the `docker` group and add your user:
 
@@ -265,9 +284,11 @@ Docker uses a bridge to manage container networking. By default, UFW drops all
 forwarding traffic. As a result, for Docker to run when UFW is
 enabled, you must set UFW's forwarding policy appropriately.
 
-Also, UFW's default set of rules denies all incoming traffic. If you want to be able
-to reach your containers from another host then you should also allow incoming
-connections on the Docker port (default `2375`).
+Also, UFW's default set of rules denies all incoming traffic. If you want to
+reach your containers from another host allow incoming connections on the Docker
+port. The Docker port defaults to `2376` if TLS is enabled or `2375` when it is
+not. If TLS is not enabled, communication is unencrypted. By default, Docker
+runs without TLS enabled.
 
 To configure UFW and allow incoming connections on the Docker port:
 

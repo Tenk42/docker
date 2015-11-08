@@ -20,7 +20,7 @@ import (
 //
 // Usage: docker volume <COMMAND> <OPTS>
 func (cli *DockerCli) CmdVolume(args ...string) error {
-	description := "Manage Docker volumes\n\nCommands:\n"
+	description := Cli.DockerCommands["volume"].Description + "\n\nCommands:\n"
 	commands := [][]string{
 		{"create", "Create a volume"},
 		{"inspect", "Return low-level information on a volume"},
@@ -33,11 +33,12 @@ func (cli *DockerCli) CmdVolume(args ...string) error {
 	}
 
 	description += "\nRun 'docker volume COMMAND --help' for more information on a command"
-	cmd := Cli.Subcmd("volume", []string{"[COMMAND]"}, description, true)
-	cmd.Require(flag.Exact, 0)
-	cmd.ParseFlags(args, true)
+	cmd := Cli.Subcmd("volume", []string{"[COMMAND]"}, description, false)
 
-	return cli.CmdVolumeLs(args...)
+	cmd.Require(flag.Exact, 0)
+	err := cmd.ParseFlags(args, true)
+	cmd.Usage()
+	return err
 }
 
 // CmdVolumeLs outputs a list of Docker volumes.
@@ -194,7 +195,7 @@ func (cli *DockerCli) CmdVolumeCreate(args ...string) error {
 		volReq.Name = *flName
 	}
 
-	resp, err := cli.call("POST", "/volumes", volReq, nil)
+	resp, err := cli.call("POST", "/volumes/create", volReq, nil)
 	if err != nil {
 		return err
 	}

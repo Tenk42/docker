@@ -15,8 +15,7 @@ weight = 3
 
  - The Remote API has replaced `rcli`.
  - The daemon listens on `unix:///var/run/docker.sock` but you can
-   [Bind Docker to another host/port or a Unix socket](
-   /articles/basics/#bind-docker-to-another-hostport-or-a-unix-socket).
+   [Bind Docker to another host/port or a Unix socket](../../articles/basics.md#bind-docker-to-another-hostport-or-a-unix-socket).
  - The API tends to be REST, but for some complex commands, like `attach`
    or `pull`, the HTTP connection is hijacked to transport `STDOUT`,
    `STDIN` and `STDERR`.
@@ -139,7 +138,10 @@ Create a container
              "Tty": false,
              "OpenStdin": false,
              "StdinOnce": false,
-             "Env": null,
+             "Env": [
+                     "FOO=bar",
+                     "BAZ=quux"
+             ],
              "Cmd": [
                      "date"
              ],
@@ -217,7 +219,7 @@ Json Parameters:
 -   **Tty** - Boolean value, Attach standard streams to a tty, including stdin if it is not closed.
 -   **OpenStdin** - Boolean value, opens stdin,
 -   **StdinOnce** - Boolean value, close stdin after the 1 attached client disconnects.
--   **Env** - A list of environment variables in the form of `VAR=value`
+-   **Env** - A list of environment variables in the form of `["VAR=value"[,"VAR2=value2"]]`
 -   **Labels** - Adds a map of labels that to a container. To specify a map: `{"key":"value"[,"key2":"value2"]}`
 -   **Cmd** - Command to run specified as a string or an array of strings.
 -   **Entrypoint** - Set the entrypoint for the container a string or an array
@@ -895,7 +897,7 @@ Status Codes:
 
     When using the TTY setting is enabled in
     [`POST /containers/create`
-    ](/reference/api/docker_remote_api_v1.9/#create-a-container "POST /containers/create"),
+    ](#create-a-container),
     the stream is the raw data from the process PTY and client's stdin.
     When the TTY is disabled, then the stream is multiplexed to separate
     stdout and stderr.
@@ -1168,7 +1170,7 @@ the path to the alternate build instructions file to use.
 
 The archive may include any number of other files,
 which will be accessible in the build context (See the [*ADD build
-command*](/reference/builder/#dockerbuilder)).
+command*](../../reference/builder.md#dockerbuilder)).
 
 The build will also be canceled if the client drops the connection by quitting
 or being killed.

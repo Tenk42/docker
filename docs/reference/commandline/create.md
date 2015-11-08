@@ -5,7 +5,6 @@ description = "The create command description and usage"
 keywords = ["docker, create, container"]
 [menu.main]
 parent = "smn_cli"
-weight=1
 +++
 <![end-metadata]-->
 
@@ -20,7 +19,7 @@ Creates a new container.
       -a, --attach=[]               Attach to STDIN, STDOUT or STDERR
       --add-host=[]                 Add a custom host-to-IP mapping (host:ip)
       --blkio-weight=0              Block IO weight (relative weight)
-      -c, --cpu-shares=0            CPU shares (relative weight)
+      --cpu-shares=0                CPU shares (relative weight)
       --cap-add=[]                  Add Linux capabilities
       --cap-drop=[]                 Drop Linux capabilities
       --cgroup-parent=""            Optional parent cgroup for the container
@@ -49,7 +48,6 @@ Creates a new container.
       --link=[]                     Add link to another container
       --log-driver=""               Logging driver for container
       --log-opt=[]                  Log driver specific options
-      --lxc-conf=[]                 Add custom lxc options
       -m, --memory=""               Memory limit
       --mac-address=""              Container MAC address (e.g. 92:d0:c6:0a:29:33)
       --memory-reservation=""       Memory soft limit
@@ -77,15 +75,14 @@ Creates a new container.
 The `docker create` command creates a writeable container layer over the
 specified image and prepares it for running the specified command.  The
 container ID is then printed to `STDOUT`.  This is similar to `docker run -d`
-except the container is never started.  You can then use the 
+except the container is never started.  You can then use the
 `docker start <container_id>` command to start the container at any point.
 
 This is useful when you want to set up a container configuration ahead of time
 so that it is ready to start when you need it. The initial status of the
 new container is `created`.
 
-Please see the [run command](/reference/commandline/run) section and the [Docker run reference](
-/reference/run/) for more details.
+Please see the [run command](run.md) section and the [Docker run reference](run.md) for more details.
 
 ## Examples
 
@@ -121,5 +118,3 @@ then be used from the subsequent container:
     -rw-r--r--  1 1000 staff  920 Nov 28 11:51 .profile
     drwx--S---  2 1000 staff  460 Dec  5 00:51 .ssh
     drwxr-xr-x 32 1000 staff 1140 Dec  5 04:01 docker
-
-

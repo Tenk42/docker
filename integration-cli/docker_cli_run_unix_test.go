@@ -57,6 +57,8 @@ func (s *DockerSuite) TestRunRedirectStdout(c *check.C) {
 
 // Test recursive bind mount works by default
 func (s *DockerSuite) TestRunWithVolumesIsRecursive(c *check.C) {
+	// /tmp gets permission denied
+	testRequires(c, NotUserNamespace)
 	tmpDir, err := ioutil.TempDir("", "docker_recursive_mount_test")
 	if err != nil {
 		c.Fatal(err)
@@ -90,7 +92,7 @@ func (s *DockerSuite) TestRunWithVolumesIsRecursive(c *check.C) {
 }
 
 func (s *DockerSuite) TestRunDeviceDirectory(c *check.C) {
-	testRequires(c, NativeExecDriver)
+	testRequires(c, DaemonIsLinux, NotUserNamespace)
 	if _, err := os.Stat("/dev/snd"); err != nil {
 		c.Skip("Host does not have /dev/snd")
 	}
@@ -234,7 +236,7 @@ func (s *DockerSuite) TestRunEchoStdoutWitCPUShares(c *check.C) {
 func (s *DockerSuite) TestRunEchoStdoutWithCPUSharesAndMemoryLimit(c *check.C) {
 	testRequires(c, cpuShare)
 	testRequires(c, memoryLimitSupport)
-	out, _, _ := dockerCmdWithStdoutStderr(c, "run", "--cpu-shares", "1000", "-m", "16m", "busybox", "echo", "test")
+	out, _, _ := dockerCmdWithStdoutStderr(c, "run", "--cpu-shares", "1000", "-m", "32m", "busybox", "echo", "test")
 	if out != "test\n" {
 		c.Errorf("container should've printed 'test', got %q instead", out)
 	}
@@ -270,9 +272,10 @@ func (s *DockerSuite) TestRunWithBlkioWeight(c *check.C) {
 
 func (s *DockerSuite) TestRunWithBlkioInvalidWeight(c *check.C) {
 	testRequires(c, blkioWeight)
-	if _, _, err := dockerCmdWithError("run", "--blkio-weight", "5", "busybox", "true"); err == nil {
-		c.Fatalf("run with invalid blkio-weight should failed")
-	}
+	out, _, err := dockerCmdWithError("run", "--blkio-weight", "5", "busybox", "true")
+	c.Assert(err, check.NotNil, check.Commentf(out))
+	expected := "Range of blkio weight is from 10 to 1000"
+	c.Assert(out, checker.Contains, expected)
 }
 
 func (s *DockerSuite) TestRunOOMExitCode(c *check.C) {
@@ -298,7 +301,7 @@ func (s *DockerSuite) TestRunOOMExitCode(c *check.C) {
 // "test" should be printed
 func (s *DockerSuite) TestRunEchoStdoutWithMemoryLimit(c *check.C) {
 	testRequires(c, memoryLimitSupport)
-	out, _, _ := dockerCmdWithStdoutStderr(c, "run", "-m", "16m", "busybox", "echo", "test")
+	out, _, _ := dockerCmdWithStdoutStderr(c, "run", "-m", "32m", "busybox", "echo", "test")
 	out = strings.Trim(out, "\r\n")
 
 	if expected := "test"; out != expected {
@@ -311,7 +314,7 @@ func (s *DockerSuite) TestRunEchoStdoutWithMemoryLimit(c *check.C) {
 // 16M memory and as much swap memory as they need (if the host
 // supports swap memory).
 func (s *DockerSuite) TestRunWithoutMemoryswapLimit(c *check.C) {
-	testRequires(c, NativeExecDriver)
+	testRequires(c, DaemonIsLinux)
 	testRequires(c, memoryLimitSupport)
 	testRequires(c, swapMemorySupport)
 	dockerCmd(c, "run", "-m", "16m", "--memory-swap", "-1", "busybox", "true")
@@ -393,8 +396,10 @@ func (s *DockerSuite) TestRunInvalidCpusetCpusFlagValue(c *check.C) {
 	}
 	out, _, err := dockerCmdWithError("run", "--cpuset-cpus", strconv.Itoa(invalid), "busybox", "true")
 	c.Assert(err, check.NotNil)
-	expected := fmt.Sprintf("Error response from daemon: Requested CPUs are not available - requested %s, available: %s.\n", strconv.Itoa(invalid), sysInfo.Cpus)
-	c.Assert(out, check.Equals, expected, check.Commentf("Expected output to contain %q, got %q", expected, out))
+	expected := fmt.Sprintf("Error response from daemon: Requested CPUs are not available - requested %s, available: %s", strconv.Itoa(invalid), sysInfo.Cpus)
+	if !(strings.Contains(out, expected)) {
+		c.Fatalf("Expected output to contain %q, got %q", expected, out)
+	}
 }
 
 func (s *DockerSuite) TestRunInvalidCpusetMemsFlagValue(c *check.C) {
@@ -412,6 +417,26 @@ func (s *DockerSuite) TestRunInvalidCpusetMemsFlagValue(c *check.C) {
 	}
 	out, _, err := dockerCmdWithError("run", "--cpuset-mems", strconv.Itoa(invalid), "busybox", "true")
 	c.Assert(err, check.NotNil)
-	expected := fmt.Sprintf("Error response from daemon: Requested memory nodes are not available - requested %s, available: %s.\n", strconv.Itoa(invalid), sysInfo.Mems)
-	c.Assert(out, check.Equals, expected, check.Commentf("Expected output to contain %q, got %q", expected, out))
+	expected := fmt.Sprintf("Error response from daemon: Requested memory nodes are not available - requested %s, available: %s", strconv.Itoa(invalid), sysInfo.Mems)
+	if !(strings.Contains(out, expected)) {
+		c.Fatalf("Expected output to contain %q, got %q", expected, out)
+	}
+}
+
+func (s *DockerSuite) TestRunInvalidCPUShares(c *check.C) {
+	testRequires(c, cpuShare, DaemonIsLinux)
+	out, _, err := dockerCmdWithError("run", "--cpu-shares", "1", "busybox", "echo", "test")
+	c.Assert(err, check.NotNil, check.Commentf(out))
+	expected := "The minimum allowed cpu-shares is 2"
+	c.Assert(out, checker.Contains, expected)
+
+	out, _, err = dockerCmdWithError("run", "--cpu-shares", "-1", "busybox", "echo", "test")
+	c.Assert(err, check.NotNil, check.Commentf(out))
+	expected = "shares: invalid argument"
+	c.Assert(out, checker.Contains, expected)
+
+	out, _, err = dockerCmdWithError("run", "--cpu-shares", "99999999", "busybox", "echo", "test")
+	c.Assert(err, check.NotNil, check.Commentf(out))
+	expected = "The maximum allowed cpu-shares is"
+	c.Assert(out, checker.Contains, expected)
 }

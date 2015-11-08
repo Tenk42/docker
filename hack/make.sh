@@ -96,7 +96,7 @@ if [ ! "$GOPATH" ]; then
 	exit 1
 fi
 
-if [ "$DOCKER_EXPERIMENTAL" ]; then
+if [ "$DOCKER_EXPERIMENTAL" ] || [ "$DOCKER_REMAP_ROOT" ]; then
 	echo >&2 '# WARNING! DOCKER_EXPERIMENTAL is set: building experimental features'
 	echo >&2
 	DOCKER_BUILDTAGS+=" experimental"
@@ -107,10 +107,6 @@ if [ -z "$DOCKER_CLIENTONLY" ]; then
 	if pkg-config libsystemd-journal 2> /dev/null ; then
 		DOCKER_BUILDTAGS+=" journald"
 	fi
-fi
-
-if [ "$DOCKER_EXECDRIVER" = 'lxc' ]; then
-	DOCKER_BUILDTAGS+=' test_no_exec'
 fi
 
 # test whether "btrfs/version.h" exists and apply btrfs_noversion appropriately
@@ -220,6 +216,7 @@ test_env() {
 		DOCKER_GRAPHDRIVER="$DOCKER_GRAPHDRIVER" \
 		DOCKER_USERLANDPROXY="$DOCKER_USERLANDPROXY" \
 		DOCKER_HOST="$DOCKER_HOST" \
+		DOCKER_REMAP_ROOT="$DOCKER_REMAP_ROOT" \
 		DOCKER_REMOTE_DAEMON="$DOCKER_REMOTE_DAEMON" \
 		GOPATH="$GOPATH" \
 		HOME="$ABS_DEST/fake-HOME" \

@@ -31,7 +31,7 @@ type v1Puller struct {
 func (p *v1Puller) Pull(tag string) (fallback bool, err error) {
 	if utils.DigestReference(tag) {
 		// Allowing fallback, because HTTPS v1 is before HTTP v2
-		return true, registry.ErrNoSupport{errors.New("Cannot pull by digest with v1 registry")}
+		return true, registry.ErrNoSupport{Err: errors.New("Cannot pull by digest with v1 registry")}
 	}
 
 	tlsConfig, err := p.registryService.TLSConfig(p.repoInfo.Index.Name)
@@ -127,7 +127,7 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 	defer func() {
 		p.graph.Release(sessionID, imgIDs...)
 	}()
-	for _, image := range repoData.ImgList {
+	for _, imgData := range repoData.ImgList {
 		downloadImage := func(img *registry.ImgData) {
 			if askedTag != "" && img.Tag != askedTag {
 				errors <- nil
@@ -137,6 +137,11 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 			if img.Tag == "" {
 				logrus.Debugf("Image (id: %s) present in this repository but untagged, skipping", img.ID)
 				errors <- nil
+				return
+			}
+
+			if err := image.ValidateID(img.ID); err != nil {
+				errors <- err
 				return
 			}
 
@@ -197,7 +202,7 @@ func (p *v1Puller) pullRepository(askedTag string) error {
 			errors <- nil
 		}
 
-		go downloadImage(image)
+		go downloadImage(imgData)
 	}
 
 	var lastError error
@@ -317,7 +322,7 @@ func (p *v1Puller) pullImage(out io.Writer, imgID, endpoint string) (layersDownl
 				layersDownloaded = true
 				defer layer.Close()
 
-				err = p.graph.Register(img,
+				err = p.graph.Register(v1Descriptor{img},
 					progressreader.New(progressreader.Config{
 						In:        layer,
 						Out:       broadcaster,

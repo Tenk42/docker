@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"time"
 
@@ -11,11 +12,16 @@ import (
 	"github.com/docker/docker/pkg/timeutils"
 )
 
+var validDrivers = map[string]bool{
+	"json-file": true,
+	"journald":  true,
+}
+
 // CmdLogs fetches the logs of a given container.
 //
 // docker logs [OPTIONS] CONTAINER
 func (cli *DockerCli) CmdLogs(args ...string) error {
-	cmd := Cli.Subcmd("logs", []string{"CONTAINER"}, "Fetch the logs of a container", true)
+	cmd := Cli.Subcmd("logs", []string{"CONTAINER"}, Cli.DockerCommands["logs"].Description, true)
 	follow := cmd.Bool([]string{"f", "-follow"}, false, "Follow log output")
 	since := cmd.String([]string{"-since"}, "", "Show logs since timestamp")
 	times := cmd.Bool([]string{"t", "-timestamps"}, false, "Show timestamps")
@@ -34,6 +40,10 @@ func (cli *DockerCli) CmdLogs(args ...string) error {
 	var c types.ContainerJSON
 	if err := json.NewDecoder(serverResp.body).Decode(&c); err != nil {
 		return err
+	}
+
+	if !validDrivers[c.HostConfig.LogConfig.Type] {
+		return fmt.Errorf("\"logs\" command is supported only for \"json-file\" and \"journald\" logging drivers (got: %s)", c.HostConfig.LogConfig.Type)
 	}
 
 	v := url.Values{}

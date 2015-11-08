@@ -59,7 +59,7 @@ There are two ways to install Docker Engine.  You can install with the `yum` pac
 
     For Fedora 22 run:
 
-		$ cat >/etc/yum.repos.d/docker.repo <<-EOF
+        $ cat >/etc/yum.repos.d/docker.repo <<-EOF
         [dockerrepo]
         name=Docker Repository
         baseurl=https://yum.dockerproject.org/repo/main/fedora/22
@@ -74,7 +74,7 @@ There are two ways to install Docker Engine.  You can install with the `yum` pac
 
 5. Start the Docker daemon.
 
-		$ sudo service docker start
+		$ sudo systemctl start docker
 
 6. Verify `docker` is installed correctly by running a test image in a container.
 
@@ -123,13 +123,13 @@ There are two ways to install Docker Engine.  You can install with the `yum` pac
 
 4. Start the Docker daemon.
 
-		$ sudo service docker start
+        $ sudo systemctl start docker
 
 5. Verify `docker` is installed correctly by running a test image in a container.
 
 		$ sudo docker run hello-world
 
-## Create a docker group		
+## Create a docker group
 
 The `docker` daemon binds to a Unix socket instead of a TCP port. By default
 that Unix socket is owned by the user `root` and other users can access it with
@@ -141,7 +141,7 @@ makes the ownership of the Unix socket read/writable by the `docker` group.
 
 >**Warning**: The `docker` group is equivalent to the `root` user; For details
 >on how this impacts security in your system, see [*Docker Daemon Attack
->Surface*](/articles/security/#docker-daemon-attack-surface) for details.
+>Surface*](../articles/security.md#docker-daemon-attack-surface) for details.
 
 To create the `docker` group and add your user:
 
@@ -163,11 +163,11 @@ To create the `docker` group and add your user:
 
 To ensure Docker starts when you boot your system, do the following:
 
-    $ sudo chkconfig docker on
+    $ sudo systemctl enable docker
 
 If you need to add an HTTP Proxy, set a different directory or partition for the
 Docker runtime files, or make other customizations, read our Systemd article to
-learn how to [customize your Systemd Docker daemon options](/articles/systemd/).
+learn how to [customize your Systemd Docker daemon options](../articles/systemd.md).
 
 ## Running Docker with a manually-defined network
 
@@ -190,7 +190,7 @@ This configuration allows IP forwarding from the container as expected.
 
 ## Uninstall
 
-You can uninstall the Docker software with `yum`.  
+You can uninstall the Docker software with `yum`.
 
 1. List the package you have installed.
 

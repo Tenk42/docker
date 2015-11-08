@@ -12,12 +12,17 @@ import (
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/local"
 	"github.com/docker/docker/api/server/router/network"
+	"github.com/docker/docker/api/server/router/volume"
 	"github.com/docker/docker/daemon"
 	"github.com/docker/docker/pkg/sockets"
 	"github.com/docker/docker/utils"
 	"github.com/gorilla/mux"
 	"golang.org/x/net/context"
 )
+
+// versionMatcher defines a variable matcher to be parsed by the router
+// when a request is about to be served.
+const versionMatcher = "/v{version:[0-9.]+}"
 
 // Config provides the configuration for the API server
 type Config struct {
@@ -72,11 +77,10 @@ func (s *Server) Close() {
 }
 
 // ServeAPI loops through all initialized servers and spawns goroutine
-// with Server method for each. It sets CreateMux() as Handler also.
+// with Serve() method for each.
 func (s *Server) ServeAPI() error {
 	var chErrors = make(chan error, len(s.servers))
 	for _, srv := range s.servers {
-		srv.srv.Handler = s.CreateMux()
 		go func(srv *HTTPServer) {
 			var err error
 			logrus.Infof("API listen on %s", srv.l.Addr())
@@ -150,7 +154,12 @@ func (s *Server) makeHTTPHandler(handler httputils.APIFunc) http.HandlerFunc {
 		ctx := context.Background()
 		handlerFunc := s.handleWithGlobalMiddlewares(handler)
 
-		if err := handlerFunc(ctx, w, r, mux.Vars(r)); err != nil {
+		vars := mux.Vars(r)
+		if vars == nil {
+			vars = make(map[string]string)
+		}
+
+		if err := handlerFunc(ctx, w, r, vars); err != nil {
 			logrus.Errorf("Handler for %s %s returned error: %s", r.Method, r.URL.Path, utils.GetErrorMessage(err))
 			httputils.WriteError(w, err)
 		}
@@ -158,9 +167,15 @@ func (s *Server) makeHTTPHandler(handler httputils.APIFunc) http.HandlerFunc {
 }
 
 // InitRouters initializes a list of routers for the server.
+// Sets those routers as Handler for each server.
 func (s *Server) InitRouters(d *daemon.Daemon) {
 	s.addRouter(local.NewRouter(d))
 	s.addRouter(network.NewRouter(d))
+	s.addRouter(volume.NewRouter(d))
+
+	for _, srv := range s.servers {
+		srv.srv.Handler = s.CreateMux()
+	}
 }
 
 // addRouter adds a new router to the server.
@@ -177,10 +192,13 @@ func (s *Server) CreateMux() *mux.Router {
 	}
 
 	logrus.Debugf("Registering routers")
-	for _, router := range s.routers {
-		for _, r := range router.Routes() {
+	for _, apiRouter := range s.routers {
+		for _, r := range apiRouter.Routes() {
 			f := s.makeHTTPHandler(r.Handler())
-			r.Register(m, f)
+
+			logrus.Debugf("Registering %s, %s", r.Method(), r.Path())
+			m.Path(versionMatcher + r.Path()).Methods(r.Method()).Handler(f)
+			m.Path(r.Path()).Methods(r.Method()).Handler(f)
 		}
 	}
 

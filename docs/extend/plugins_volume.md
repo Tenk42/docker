@@ -12,7 +12,7 @@ parent = "mn_extend"
 
 Docker volume plugins enable Docker deployments to be integrated with external
 storage systems, such as Amazon EBS, and enable data volumes to persist beyond
-the lifetime of a single Docker host. See the [plugin documentation](/extend/plugins)
+the lifetime of a single Docker host. See the [plugin documentation](plugins.md)
 for more information.
 
 # Command-line changes
@@ -101,7 +101,9 @@ Respond with a string error if an error occurred.
 ```
 
 Docker requires the plugin to provide a volume, given a user specified volume
-name. This is called once per container start.
+name. This is called once per container start. If the same volume_name is requested
+more than once, the plugin may need to keep track of each new mount request and provision
+at the first mount request and deprovision at the last corresponding unmount request.
 
 **Response**:
 ```

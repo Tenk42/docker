@@ -5,7 +5,6 @@ description = "The search command description and usage"
 keywords = ["search, hub, images"]
 [menu.main]
 parent = "smn_cli"
-weight=1
 +++
 <![end-metadata]-->
 
@@ -22,9 +21,8 @@ weight=1
 
 Search [Docker Hub](https://hub.docker.com) for images
 
-See [*Find Public Images on Docker Hub*](/userguide/dockerrepos/#searching-for-images) for
+See [*Find Public Images on Docker Hub*](../../userguide/dockerrepos.md#searching-for-images) for
 more details on finding shared images from the command line.
 
 > **Note:**
 > Search queries will only return up to 25 results
-

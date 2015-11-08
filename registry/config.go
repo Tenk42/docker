@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/docker/distribution/registry/api/v2"
+	"github.com/docker/distribution/reference"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
@@ -57,7 +57,7 @@ func (options *Options) InstallFlags(cmd *flag.FlagSet, usageFn func(string) str
 	cmd.Var(&options.Mirrors, []string{"-registry-mirror"}, usageFn("Preferred Docker registry mirror"))
 	options.InsecureRegistries = opts.NewListOpts(ValidateIndexName)
 	cmd.Var(&options.InsecureRegistries, []string{"-insecure-registry"}, usageFn("Enable insecure registry communication"))
-	cmd.BoolVar(&V2Only, []string{"-no-legacy-registry"}, false, "Do not contact legacy registries")
+	cmd.BoolVar(&V2Only, []string{"-disable-legacy-registry"}, false, "Do not contact legacy registries")
 }
 
 type netIPNet net.IPNet
@@ -226,7 +226,8 @@ func validateRemoteName(remoteName string) error {
 		}
 	}
 
-	return v2.ValidateRepositoryName(remoteName)
+	_, err := reference.WithName(remoteName)
+	return err
 }
 
 func validateNoSchema(reposName string) error {
