@@ -3,11 +3,12 @@ package daemon
 import (
 	"strings"
 
+	"github.com/docker/docker/container"
 	derr "github.com/docker/docker/errors"
-	"github.com/docker/docker/volume/store"
+	volumestore "github.com/docker/docker/volume/store"
 )
 
-func (daemon *Daemon) prepareMountPoints(container *Container) error {
+func (daemon *Daemon) prepareMountPoints(container *container.Container) error {
 	for _, config := range container.MountPoints {
 		if len(config.Driver) > 0 {
 			v, err := daemon.createVolume(config.Name, config.Driver, nil)
@@ -20,7 +21,7 @@ func (daemon *Daemon) prepareMountPoints(container *Container) error {
 	return nil
 }
 
-func (daemon *Daemon) removeMountPoints(container *Container, rm bool) error {
+func (daemon *Daemon) removeMountPoints(container *container.Container, rm bool) error {
 	var rmErrors []string
 	for _, m := range container.MountPoints {
 		if m.Volume == nil {
@@ -34,7 +35,7 @@ func (daemon *Daemon) removeMountPoints(container *Container, rm bool) error {
 			// not an error, but an implementation detail.
 			// This prevents docker from logging "ERROR: Volume in use"
 			// where there is another container using the volume.
-			if err != nil && err != store.ErrVolumeInUse {
+			if err != nil && !volumestore.IsInUse(err) {
 				rmErrors = append(rmErrors, err.Error())
 			}
 		}

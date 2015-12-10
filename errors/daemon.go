@@ -14,7 +14,7 @@ var (
 	// name or ID and we can't find it.
 	ErrorCodeNoSuchContainer = errcode.Register(errGroup, errcode.ErrorDescriptor{
 		Value:          "NOSUCHCONTAINER",
-		Message:        "no such id: %s",
+		Message:        "No such container: %s",
 		Description:    "The specified container can not be found",
 		HTTPStatusCode: http.StatusNotFound,
 	})
@@ -444,12 +444,12 @@ var (
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
-	// ErrorCodeVolumeDup is generated when we try to mount two volumes
+	// ErrorCodeMountDup is generated when we try to mount two mounts points
 	// to the same path.
-	ErrorCodeVolumeDup = errcode.Register(errGroup, errcode.ErrorDescriptor{
-		Value:          "VOLUMEDUP",
-		Message:        "Duplicate bind mount '%s'",
-		Description:    "An attempt was made to mount a volume but the specified destination location is already used in a previous mount",
+	ErrorCodeMountDup = errcode.Register(errGroup, errcode.ErrorDescriptor{
+		Value:          "MOUNTDUP",
+		Message:        "Duplicate mount point '%s'",
+		Description:    "An attempt was made to mount a content but the specified destination location is already used in a previous mount",
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
@@ -832,15 +832,6 @@ var (
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
-	// ErrorCodeRmInit is generated when we try to delete a container
-	// but failed deleting its init filesystem.
-	ErrorCodeRmInit = errcode.Register(errGroup, errcode.ErrorDescriptor{
-		Value:          "RMINIT",
-		Message:        "Driver %s failed to remove init filesystem %s: %s",
-		Description:    "While trying to delete a container, the driver failed to remove the init filesystem",
-		HTTPStatusCode: http.StatusInternalServerError,
-	})
-
 	// ErrorCodeRmFS is generated when we try to delete a container
 	// but failed deleting its filesystem.
 	ErrorCodeRmFS = errcode.Register(errGroup, errcode.ErrorDescriptor{
@@ -917,30 +908,30 @@ var (
 	// trying to create a volume that has existed using different driver.
 	ErrorVolumeNameTaken = errcode.Register(errGroup, errcode.ErrorDescriptor{
 		Value:          "VOLUME_NAME_TAKEN",
-		Message:        "A volume name %s already exists with the %s driver. Choose a different volume name.",
+		Message:        "A volume named %q already exists with the %q driver. Choose a different volume name.",
 		Description:    "An attempt to create a volume using a driver but the volume already exists with a different driver",
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
-	// ErrorCodeCmdNotFound is generated when contained cmd can't start,
-	// contained command not found error, exit code 127
+	// ErrorCodeCmdNotFound is generated when container cmd can't start,
+	// container command not found error, exit code 127
 	ErrorCodeCmdNotFound = errcode.Register(errGroup, errcode.ErrorDescriptor{
 		Value:          "CMDNOTFOUND",
-		Message:        "Contained command not found or does not exist.",
+		Message:        "Container command not found or does not exist.",
 		Description:    "Command could not be found, command does not exist",
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
-	// ErrorCodeCmdCouldNotBeInvoked is generated when contained cmd can't start,
-	// contained command permission denied error, exit code 126
+	// ErrorCodeCmdCouldNotBeInvoked is generated when container cmd can't start,
+	// container command permission denied error, exit code 126
 	ErrorCodeCmdCouldNotBeInvoked = errcode.Register(errGroup, errcode.ErrorDescriptor{
 		Value:          "CMDCOULDNOTBEINVOKED",
-		Message:        "Contained command could not be invoked.",
+		Message:        "Container command could not be invoked.",
 		Description:    "Permission denied, cannot invoke command",
 		HTTPStatusCode: http.StatusInternalServerError,
 	})
 
-	// ErrorCodeCantStart is generated when contained cmd can't start,
+	// ErrorCodeCantStart is generated when container cmd can't start,
 	// for any reason other than above 2 errors
 	ErrorCodeCantStart = errcode.Register(errGroup, errcode.ErrorDescriptor{
 		Value:          "CANTSTART",

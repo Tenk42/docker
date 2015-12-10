@@ -30,7 +30,12 @@ For example:
      Dirperm1 Supported: true
     Execution Driver: native-0.2
     Logging Driver: json-file
+    Plugins:
+     Volume: local
+     Network: bridge null host
     Kernel Version: 3.19.0-22-generic
+    OSType: linux
+    Architecture: x86_64
     Operating System: Ubuntu 15.04
     CPUs: 24
     Total Memory: 62.86 GiB

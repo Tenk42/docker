@@ -375,7 +375,7 @@ networks.
 
 Within a user-defined bridge network, linking is not supported. You can
 expose and publish container ports on containers in this network. This is useful
-if you want make a portion of the `bridge` network available to an outside
+if you want to make a portion of the `bridge` network available to an outside
 network.
 
 ![Bridge network](images/network_access.png)
@@ -404,20 +404,44 @@ provision the hosts are with Docker Machine.
 
 ![Engine on each host](images/engine_on_net.png)
 
+You should open the following ports between each of your hosts.
+
+| Protocol | Port | Description           |
+|----------|------|-----------------------|
+| udp      | 4789 | Data plane (VXLAN)    |
+| tcp/udp  | 7946 | Control plane         |
+
+Your key-value store service may require additional ports. 
+Check your vendor's documentation and open any required ports.
+
 Once you have several machines provisioned, you can use Docker Swarm to quickly
 form them into a swarm which includes a discovery service as well.
 
 To create an overlay network, you configure options on  the `daemon` on each
 Docker Engine for use with `overlay` network. There are two options to set:
 
-| Option                           | Description                                               |
-|----------------------------------|-----------------------------------------------------------|
-| `--cluster-store=PROVIDER://URL` | Describes the location of the KV service.               |
-| `--cluster-advertise=HOST_IP`    | Advertises containers created by the HOST on the network. |
+<table>
+    <thead>
+    <tr>
+        <th>Option</th>
+        <th>Description</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+        <td><pre>--cluster-store=PROVIDER://URL</pre></td>
+        <td>Describes the location of the KV service.</td>
+    </tr>
+    <tr>
+        <td><pre>--cluster-advertise=HOST_IP|HOST_IFACE:PORT</pre></td>
+        <td>The IP address or interface of the HOST used for clustering.</td>
+    </tr>
+    </tbody>
+</table>
 
 Create an `overlay` network on one of the machines in the Swarm.
 
-        $ docker network create --driver overlay my-multi-host-network
+    $ docker network create --driver overlay my-multi-host-network
 
 This results in a single network spanning multiple hosts. An `overlay` network
 provides complete isolation for the containers.
@@ -426,7 +450,7 @@ provides complete isolation for the containers.
 
 Then, on each host, launch containers making sure to specify the network name.
 
-        $ docker run -itd --net=my-multi-host-network busybox
+    $ docker run -itd --net=my-multi-host-network busybox
 
 Once connected, each container has access to all the containers in the network
 regardless of which Docker host the container was launched on.
@@ -455,7 +479,7 @@ built-in network drivers. For example:
 You can inspect it, add containers too and from it, and so forth. Of course,
 different plugins may make use of different technologies or frameworks. Custom
 networks can include features not present in Docker's default networks. For more
-information on writing plugins, see [Extending Docker](../../extend) and
+information on writing plugins, see [Extending Docker](../../extend/index.md) and
 [Writing a network driver plugin](../../extend/plugins_network.md).
 
 ## Legacy links

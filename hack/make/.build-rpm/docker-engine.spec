@@ -58,6 +58,13 @@ Requires: device-mapper >= 1.02.90-2
 %global with_selinux 1
 %endif
 
+%if 0%{?_experimental}
+# yubico-piv-tool conditional
+%if 0%{?fedora} >= 20 || 0%{?centos} >= 7 || 0%{?rhel} >= 7
+Requires: yubico-piv-tool >= 1.1.0
+%endif
+%endif
+
 # start if with_selinux
 %if 0%{?with_selinux}
 # Version of SELinux we were using
@@ -84,6 +91,7 @@ Requires(pre): %{name}-selinux >= %{epoch}:%{version}-%{release}
 # conflicting packages
 Conflicts: docker
 Conflicts: docker-io
+Conflicts: docker-engine-cs
 
 %description
 Docker is an open source project to build, ship and run any application as a
@@ -122,7 +130,7 @@ install -p -m 755 bundles/%{_origversion}/dynbinary/dockerinit-%{_origversion} $
 
 # install udev rules
 install -d $RPM_BUILD_ROOT/%{_sysconfdir}/udev/rules.d
-install -p -m 755 contrib/udev/80-docker.rules $RPM_BUILD_ROOT/%{_sysconfdir}/udev/rules.d/80-docker.rules
+install -p -m 644 contrib/udev/80-docker.rules $RPM_BUILD_ROOT/%{_sysconfdir}/udev/rules.d/80-docker.rules
 
 # add init scripts
 install -d $RPM_BUILD_ROOT/etc/sysconfig

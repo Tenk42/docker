@@ -13,13 +13,13 @@ parent = "mn_use_docker"
 
 Docker is an open platform for developing, shipping, and running applications.
 Docker is designed to deliver your applications faster. With Docker you can
-separate your applications from your infrastructure AND treat your
+separate your applications from your infrastructure and treat your
 infrastructure like a managed application. Docker helps you ship code faster,
 test faster, deploy faster, and shorten the cycle between writing code and
 running code.
 
-Docker does this by combining a lightweight container virtualization platform
-with workflows and tooling that help you manage and deploy your applications.
+Docker does this by combining kernel containerization features with workflows
+and tooling that help you manage and deploy your applications.
 
 At its core, Docker provides a way to run almost any application securely
 isolated in a container. The isolation and security allow you to run many
@@ -27,14 +27,14 @@ containers simultaneously on your host. The lightweight nature of containers,
 which run without the extra load of a hypervisor, means you can get more out of
 your hardware.
 
-Surrounding the container virtualization are tooling and a platform which can
-help you in several ways:
+Surrounding the container is tooling and a platform which can help you in
+several ways:
 
 * getting your applications (and supporting components) into Docker containers
 * distributing and shipping those containers to your teams for further development
 and testing
 * deploying those applications to your production environment,
- whether it be in a local data center or the Cloud.
+ whether it is in a local data center or the Cloud.
 
 ## What can I use Docker for?
 
@@ -73,7 +73,7 @@ out of the resources you have.
 Docker has two major components:
 
 
-* Docker: the open source container virtualization platform.
+* Docker: the open source containerization platform.
 * [Docker Hub](https://hub.docker.com): our Software-as-a-Service
   platform for sharing and managing Docker containers.
 
@@ -285,9 +285,9 @@ BSD Jails or Solaris Zones.
 
 ## Next steps
 ### Installing Docker
-Visit the [installation section](../installation/#installation).
+Visit the [installation section](../installation/index.md#installation).
 
 ### The Docker user guide
-[Learn Docker in depth](../userguide/).
+[Learn Docker in depth](../userguide/index.md).
 
 

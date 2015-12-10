@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/container"
 	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/signal"
 )
@@ -27,16 +28,9 @@ func (daemon *Daemon) ContainerKill(name string, sig uint64) error {
 
 	// If no signal is passed, or SIGKILL, perform regular Kill (SIGKILL + wait())
 	if sig == 0 || syscall.Signal(sig) == syscall.SIGKILL {
-		if err := daemon.Kill(container); err != nil {
-			return err
-		}
-	} else {
-		// Otherwise, just send the requested signal
-		if err := daemon.killWithSignal(container, int(sig)); err != nil {
-			return err
-		}
+		return daemon.Kill(container)
 	}
-	return nil
+	return daemon.killWithSignal(container, int(sig))
 }
 
 // killWithSignal sends the container the given signal. This wrapper for the
@@ -44,7 +38,7 @@ func (daemon *Daemon) ContainerKill(name string, sig uint64) error {
 // to send the signal. An error is returned if the container is paused
 // or not running, or if there is a problem returned from the
 // underlying kill command.
-func (daemon *Daemon) killWithSignal(container *Container, sig int) error {
+func (daemon *Daemon) killWithSignal(container *container.Container, sig int) error {
 	logrus.Debugf("Sending %d to %s", sig, container.ID)
 	container.Lock()
 	defer container.Unlock()
@@ -76,7 +70,7 @@ func (daemon *Daemon) killWithSignal(container *Container, sig int) error {
 }
 
 // Kill forcefully terminates a container.
-func (daemon *Daemon) Kill(container *Container) error {
+func (daemon *Daemon) Kill(container *container.Container) error {
 	if !container.IsRunning() {
 		return derr.ErrorCodeNotRunning.WithArgs(container.ID)
 	}
@@ -112,7 +106,7 @@ func (daemon *Daemon) Kill(container *Container) error {
 }
 
 // killPossibleDeadProcess is a wrapper aroung killSig() suppressing "no such process" error.
-func (daemon *Daemon) killPossiblyDeadProcess(container *Container, sig int) error {
+func (daemon *Daemon) killPossiblyDeadProcess(container *container.Container, sig int) error {
 	err := daemon.killWithSignal(container, sig)
 	if err == syscall.ESRCH {
 		logrus.Debugf("Cannot kill process (pid=%d) with signal %d: no such process.", container.GetPID(), sig)

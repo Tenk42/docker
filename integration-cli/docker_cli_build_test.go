@@ -151,6 +151,8 @@ func (s *DockerSuite) TestBuildEnvironmentReplacementExpose(c *check.C) {
   FROM scratch
   ENV port 80
   EXPOSE ${port}
+  ENV ports "  99   100 "
+  EXPOSE ${ports}
   `, true)
 	if err != nil {
 		c.Fatal(err)
@@ -167,8 +169,13 @@ func (s *DockerSuite) TestBuildEnvironmentReplacementExpose(c *check.C) {
 		c.Fatal(err)
 	}
 
-	if _, ok := exposedPorts["80/tcp"]; !ok {
-		c.Fatal("Exposed port 80 from environment not in Config.ExposedPorts on image")
+	exp := []int{80, 99, 100}
+
+	for _, p := range exp {
+		tmp := fmt.Sprintf("%d/tcp", p)
+		if _, ok := exposedPorts[tmp]; !ok {
+			c.Fatalf("Exposed port %d from environment not in Config.ExposedPorts on image", p)
+		}
 	}
 
 }
@@ -752,7 +759,7 @@ ADD test_file .`,
 		close(errChan)
 	}()
 	select {
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		c.Fatal("Build with adding to workdir timed out")
 	case err := <-errChan:
 		c.Assert(err, check.IsNil)
@@ -1401,7 +1408,7 @@ COPY test_file .`,
 		close(errChan)
 	}()
 	select {
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		c.Fatal("Build with adding to workdir timed out")
 	case err := <-errChan:
 		c.Assert(err, check.IsNil)
@@ -1884,9 +1891,7 @@ func (s *DockerSuite) TestBuildCancellationKillsSleep(c *check.C) {
 
 	startEpoch := daemonTime(c).Unix()
 	// Watch for events since epoch.
-	eventsCmd := exec.Command(
-		dockerBinary, "events",
-		"--since", strconv.FormatInt(startEpoch, 10))
+	eventsCmd := exec.Command(dockerBinary, "events", "--since", strconv.FormatInt(startEpoch, 10))
 	stdout, err := eventsCmd.StdoutPipe()
 	if err != nil {
 		c.Fatal(err)
@@ -1925,12 +1930,12 @@ func (s *DockerSuite) TestBuildCancellationKillsSleep(c *check.C) {
 		c.Fatalf("failed to run build: %s", err)
 	}
 
-	matchCID := regexp.MustCompile("Running in ")
+	matchCID := regexp.MustCompile("Running in (.+)")
 	scanner := bufio.NewScanner(stdoutBuild)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if ok := matchCID.MatchString(line); ok {
-			containerID <- line[len(line)-12:]
+		if matches := matchCID.FindStringSubmatch(line); len(matches) > 0 {
+			containerID <- matches[1]
 			break
 		}
 	}
@@ -3463,12 +3468,18 @@ func (s *DockerSuite) TestBuildDockerignore(c *check.C) {
 		RUN [[ ! -e /bla/README.md ]]
 		RUN [[ ! -e /bla/dir/foo ]]
 		RUN [[ ! -e /bla/foo ]]
-		RUN [[ ! -e /bla/.git ]]`
+		RUN [[ ! -e /bla/.git ]]
+		RUN [[ ! -e v.cc ]]
+		RUN [[ ! -e src/v.cc ]]
+		RUN [[ ! -e src/_vendor/v.cc ]]`
 	ctx, err := fakeContext(dockerfile, map[string]string{
 		"Makefile":         "all:",
 		".git/HEAD":        "ref: foo",
 		"src/x.go":         "package main",
 		"src/_vendor/v.go": "package main",
+		"src/_vendor/v.cc": "package main",
+		"src/v.cc":         "package main",
+		"v.cc":             "package main",
 		"dir/foo":          "",
 		".gitignore":       "",
 		"README.md":        "readme",
@@ -3478,6 +3489,7 @@ pkg
 .gitignore
 src/_vendor
 *.md
+**/*.cc
 dir`,
 	})
 	if err != nil {
@@ -3527,7 +3539,8 @@ func (s *DockerSuite) TestBuildDockerignoreExceptions(c *check.C) {
 		RUN [[ -f /bla/dir/e ]]
 		RUN [[ -f /bla/dir/e-dir/foo ]]
 		RUN [[ ! -e /bla/foo ]]
-		RUN [[ ! -e /bla/.git ]]`
+		RUN [[ ! -e /bla/.git ]]
+		RUN [[ -e /bla/dir/a.cc ]]`
 	ctx, err := fakeContext(dockerfile, map[string]string{
 		"Makefile":         "all:",
 		".git/HEAD":        "ref: foo",
@@ -3541,6 +3554,7 @@ func (s *DockerSuite) TestBuildDockerignoreExceptions(c *check.C) {
 		"dir/e-dir/foo":    "",
 		".gitignore":       "",
 		"README.md":        "readme",
+		"dir/a.cc":         "hello",
 		".dockerignore": `
 .git
 pkg
@@ -3549,7 +3563,9 @@ src/_vendor
 *.md
 dir
 !dir/e*
-!dir/dir/foo`,
+!dir/dir/foo
+**/*.cc
+!**/*.cc`,
 	})
 	if err != nil {
 		c.Fatal(err)
@@ -3732,7 +3748,7 @@ func (s *DockerSuite) TestBuildDockerignoringWholeDir(c *check.C) {
 
 func (s *DockerSuite) TestBuildDockerignoringBadExclusion(c *check.C) {
 	testRequires(c, DaemonIsLinux)
-	name := "testbuilddockerignorewholedir"
+	name := "testbuilddockerignorebadexclusion"
 	dockerfile := `
         FROM busybox
 		COPY . /
@@ -3753,6 +3769,112 @@ func (s *DockerSuite) TestBuildDockerignoringBadExclusion(c *check.C) {
 	if err.Error() != "failed to build the image: Error checking context: 'Illegal exclusion pattern: !'.\n" {
 		c.Fatalf("Incorrect output, got:%q", err.Error())
 	}
+}
+
+func (s *DockerSuite) TestBuildDockerignoringWildTopDir(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+
+	dockerfile := `
+        FROM busybox
+		COPY . /
+		RUN [[ ! -e /.dockerignore ]]
+		RUN [[ ! -e /Dockerfile ]]
+		RUN [[ ! -e /file1 ]]
+		RUN [[ ! -e /dir ]]`
+
+	ctx, err := fakeContext(dockerfile, map[string]string{
+		"Dockerfile": "FROM scratch",
+		"file1":      "",
+		"dir/dfile1": "",
+	})
+	c.Assert(err, check.IsNil)
+	defer ctx.Close()
+
+	// All of these should result in ignoring all files
+	for _, variant := range []string{"**", "**/", "**/**", "*"} {
+		ctx.Add(".dockerignore", variant)
+		_, err = buildImageFromContext("noname", ctx, true)
+		c.Assert(err, check.IsNil, check.Commentf("variant: %s", variant))
+	}
+}
+
+func (s *DockerSuite) TestBuildDockerignoringWildDirs(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+
+	dockerfile := `
+        FROM busybox
+		COPY . /
+		RUN [[ -e /.dockerignore ]]
+		RUN [[ -e /Dockerfile ]]
+
+		RUN [[ ! -e /file0 ]]
+		RUN [[ ! -e /dir1/file0 ]]
+		RUN [[ ! -e /dir2/file0 ]]
+
+		RUN [[ ! -e /file1 ]]
+		RUN [[ ! -e /dir1/file1 ]]
+		RUN [[ ! -e /dir1/dir2/file1 ]]
+
+		RUN [[ ! -e /dir1/file2 ]]
+		RUN [[   -e /dir1/dir2/file2 ]]
+
+		RUN [[ ! -e /dir1/dir2/file4 ]]
+		RUN [[ ! -e /dir1/dir2/file5 ]]
+		RUN [[ ! -e /dir1/dir2/file6 ]]
+		RUN [[ ! -e /dir1/dir3/file7 ]]
+		RUN [[ ! -e /dir1/dir3/file8 ]]
+		RUN [[   -e /dir1/dir3 ]]
+		RUN [[   -e /dir1/dir4 ]]
+
+		RUN [[ ! -e 'dir1/dir5/fileAA' ]]
+		RUN [[   -e 'dir1/dir5/fileAB' ]]
+		RUN [[   -e 'dir1/dir5/fileB' ]]   # "." in pattern means nothing
+
+		RUN echo all done!`
+
+	ctx, err := fakeContext(dockerfile, map[string]string{
+		"Dockerfile":      "FROM scratch",
+		"file0":           "",
+		"dir1/file0":      "",
+		"dir1/dir2/file0": "",
+
+		"file1":           "",
+		"dir1/file1":      "",
+		"dir1/dir2/file1": "",
+
+		"dir1/file2":      "",
+		"dir1/dir2/file2": "", // remains
+
+		"dir1/dir2/file4": "",
+		"dir1/dir2/file5": "",
+		"dir1/dir2/file6": "",
+		"dir1/dir3/file7": "",
+		"dir1/dir3/file8": "",
+		"dir1/dir4/file9": "",
+
+		"dir1/dir5/fileAA": "",
+		"dir1/dir5/fileAB": "",
+		"dir1/dir5/fileB":  "",
+
+		".dockerignore": `
+**/file0
+**/*file1
+**/dir1/file2
+dir1/**/file4
+**/dir2/file5
+**/dir1/dir2/file6
+dir1/dir3/**
+**/dir4/**
+**/file?A
+**/file\?B
+**/dir5/file.
+`,
+	})
+	c.Assert(err, check.IsNil)
+	defer ctx.Close()
+
+	_, err = buildImageFromContext("noname", ctx, true)
+	c.Assert(err, check.IsNil)
 }
 
 func (s *DockerSuite) TestBuildLineBreak(c *check.C) {
@@ -4093,6 +4215,79 @@ RUN cat /existing-directory-trailing-slash/test/foo | grep Hi`
 
 }
 
+func (s *DockerSuite) TestBuildAddBrokenTar(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+	name := "testbuildaddbrokentar"
+
+	ctx := func() *FakeContext {
+		dockerfile := `
+FROM busybox
+ADD test.tar /`
+		tmpDir, err := ioutil.TempDir("", "fake-context")
+		c.Assert(err, check.IsNil)
+		testTar, err := os.Create(filepath.Join(tmpDir, "test.tar"))
+		if err != nil {
+			c.Fatalf("failed to create test.tar archive: %v", err)
+		}
+		defer testTar.Close()
+
+		tw := tar.NewWriter(testTar)
+
+		if err := tw.WriteHeader(&tar.Header{
+			Name: "test/foo",
+			Size: 2,
+		}); err != nil {
+			c.Fatalf("failed to write tar file header: %v", err)
+		}
+		if _, err := tw.Write([]byte("Hi")); err != nil {
+			c.Fatalf("failed to write tar file content: %v", err)
+		}
+		if err := tw.Close(); err != nil {
+			c.Fatalf("failed to close tar archive: %v", err)
+		}
+
+		// Corrupt the tar by removing one byte off the end
+		stat, err := testTar.Stat()
+		if err != nil {
+			c.Fatalf("failed to stat tar archive: %v", err)
+		}
+		if err := testTar.Truncate(stat.Size() - 1); err != nil {
+			c.Fatalf("failed to truncate tar archive: %v", err)
+		}
+
+		if err := ioutil.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+			c.Fatalf("failed to open destination dockerfile: %v", err)
+		}
+		return fakeContextFromDir(tmpDir)
+	}()
+	defer ctx.Close()
+
+	if _, err := buildImageFromContext(name, ctx, true); err == nil {
+		c.Fatalf("build should have failed for TestBuildAddBrokenTar")
+	}
+}
+
+func (s *DockerSuite) TestBuildAddNonTar(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+	name := "testbuildaddnontar"
+
+	// Should not try to extract test.tar
+	ctx, err := fakeContext(`
+		FROM busybox
+		ADD test.tar /
+		RUN test -f /test.tar`,
+		map[string]string{"test.tar": "not_a_tar_file"})
+
+	if err != nil {
+		c.Fatal(err)
+	}
+	defer ctx.Close()
+
+	if _, err := buildImageFromContext(name, ctx, true); err != nil {
+		c.Fatalf("build failed for TestBuildAddNonTar")
+	}
+}
+
 func (s *DockerSuite) TestBuildAddTarXz(c *check.C) {
 	// /test/foo is not owned by the correct user
 	testRequires(c, NotUserNamespace)
@@ -4419,7 +4614,7 @@ func (s *DockerSuite) TestBuildInvalidTag(c *check.C) {
 	_, out, err := buildImageWithOut(name, "FROM scratch\nMAINTAINER quux\n", true)
 	// if the error doesnt check for illegal tag name, or the image is built
 	// then this should fail
-	if !strings.Contains(out, "Illegal tag name") || strings.Contains(out, "Sending build context to Docker daemon") {
+	if !strings.Contains(out, "invalid reference format") || strings.Contains(out, "Sending build context to Docker daemon") {
 		c.Fatalf("failed to stop before building. Error: %s, Output: %s", err, out)
 	}
 }
@@ -6253,7 +6448,7 @@ func (s *DockerSuite) TestBuildTagEvent(c *check.C) {
 	select {
 	case ev := <-ch:
 		c.Assert(ev.Status, check.Equals, "tag")
-		c.Assert(ev.ID, check.Equals, "test:")
+		c.Assert(ev.ID, check.Equals, "test:latest")
 	case <-time.After(time.Second):
 		c.Fatal("The 'tag' event not heard from the server")
 	}
@@ -6400,4 +6595,31 @@ func (s *DockerSuite) TestBuildSymlinkBasename(c *check.C) {
 	out, _ := dockerCmd(c, "run", "--rm", id, "cat", "asymlink")
 	c.Assert(out, checker.Matches, "bar")
 
+}
+
+// #17827
+func (s *DockerSuite) TestBuildCacheRootSource(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+	name := "testbuildrootsource"
+	ctx, err := fakeContext(`
+	FROM busybox
+	COPY / /data`,
+		map[string]string{
+			"foo": "bar",
+		})
+	c.Assert(err, checker.IsNil)
+	defer ctx.Close()
+
+	// warm up cache
+	_, err = buildImageFromContext(name, ctx, true)
+	c.Assert(err, checker.IsNil)
+
+	// change file, should invalidate cache
+	err = ioutil.WriteFile(filepath.Join(ctx.Dir, "foo"), []byte("baz"), 0644)
+	c.Assert(err, checker.IsNil)
+
+	_, out, err := buildImageFromContextWithOut(name, ctx, true)
+	c.Assert(err, checker.IsNil)
+
+	c.Assert(out, checker.Not(checker.Contains), "Using cache")
 }

@@ -29,12 +29,12 @@ https://github.com/docker/docker/blob/master/LICENSE)
 
 ### Does Docker run on Mac OS X or Windows?
 
-Docker currently runs only on Linux, but you can use VirtualBox to run Docker in
-a virtual machine on your box, and get the best of both worlds. Check out the
-[*Mac OS X*](../installation/mac.md) and [*Microsoft
+Docker currently runs only on Linux, but you can use VirtualBox to run Docker
+in a virtual machine on your box, and get the best of both worlds. Check out
+the [*Mac OS X*](../installation/mac.md) and [*Microsoft
 Windows*](../installation/windows.md) installation guides. The small Linux
-distribution Docker Machine can be run inside virtual machines on these two
-operating systems.
+distribution boot2docker can be set up using the Docker Machine tool to be run
+inside virtual machines on these two operating systems.
 
 >**Note:** if you are using a remote Docker daemon on a VM through Docker
 >Machine, then _do not_ type the `sudo` before the `docker` commands shown in
@@ -135,7 +135,7 @@ thousands or even millions of containers running in parallel.
 
 ### How do I connect Docker containers?
 
-Currently the recommended way to connect containers is via the Docker network feature. You can see details of how to [work with Docker networks here](https://docs.docker.com/networking).
+Currently the recommended way to connect containers is via the Docker network feature. You can see details of how to [work with Docker networks here](../userguide/networking/work-with-networks.md).
 
 Also useful for more flexible service portability is the [Ambassador linking
 pattern](../articles/ambassador_pattern_linking.md).
@@ -269,4 +269,4 @@ You can find more answers on:
 - [Ask questions on Stackoverflow](http://stackoverflow.com/search?q=docker)
 - [Join the conversation on Twitter](http://twitter.com/docker)
 
-Looking for something else to read? Checkout the [User Guide](../userguide/).
+Looking for something else to read? Checkout the [User Guide](../userguide/index.md).

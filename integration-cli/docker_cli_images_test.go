@@ -20,24 +20,22 @@ func (s *DockerSuite) TestImagesEnsureImageIsListed(c *check.C) {
 
 func (s *DockerSuite) TestImagesEnsureImageWithTagIsListed(c *check.C) {
 	testRequires(c, DaemonIsLinux)
-	_, err := buildImage("imagewithtag:v1",
-		`FROM scratch
-		MAINTAINER dockerio1`, true)
-	c.Assert(err, check.IsNil)
 
-	_, err = buildImage("imagewithtag:v2",
-		`FROM scratch
-		MAINTAINER dockerio1`, true)
-	c.Assert(err, check.IsNil)
+	name := "imagewithtag"
+	dockerCmd(c, "tag", "busybox", name+":v1")
+	dockerCmd(c, "tag", "busybox", name+":v1v1")
+	dockerCmd(c, "tag", "busybox", name+":v2")
 
-	imagesOut, _ := dockerCmd(c, "images", "imagewithtag:v1")
-	c.Assert(imagesOut, checker.Contains, "imagewithtag")
+	imagesOut, _ := dockerCmd(c, "images", name+":v1")
+	c.Assert(imagesOut, checker.Contains, name)
 	c.Assert(imagesOut, checker.Contains, "v1")
 	c.Assert(imagesOut, checker.Not(checker.Contains), "v2")
+	c.Assert(imagesOut, checker.Not(checker.Contains), "v1v1")
 
-	imagesOut, _ = dockerCmd(c, "images", "imagewithtag")
-	c.Assert(imagesOut, checker.Contains, "imagewithtag")
+	imagesOut, _ = dockerCmd(c, "images", name)
+	c.Assert(imagesOut, checker.Contains, name)
 	c.Assert(imagesOut, checker.Contains, "v1")
+	c.Assert(imagesOut, checker.Contains, "v1v1")
 	c.Assert(imagesOut, checker.Contains, "v2")
 }
 
@@ -76,7 +74,7 @@ func (s *DockerSuite) TestImagesErrorWithInvalidFilterNameTest(c *check.C) {
 	c.Assert(out, checker.Contains, "Invalid filter")
 }
 
-func (s *DockerSuite) TestImagesFilterLabel(c *check.C) {
+func (s *DockerSuite) TestImagesFilterLabelMatch(c *check.C) {
 	testRequires(c, DaemonIsLinux)
 	imageName1 := "images_filter_test1"
 	imageName2 := "images_filter_test2"
@@ -98,9 +96,9 @@ func (s *DockerSuite) TestImagesFilterLabel(c *check.C) {
 
 	out, _ := dockerCmd(c, "images", "--no-trunc", "-q", "-f", "label=match")
 	out = strings.TrimSpace(out)
-	c.Assert(out, check.Matches, fmt.Sprintf("[\\s\\w]*%s[\\s\\w]*", image1ID))
-	c.Assert(out, check.Matches, fmt.Sprintf("[\\s\\w]*%s[\\s\\w]*", image2ID))
-	c.Assert(out, check.Not(check.Matches), fmt.Sprintf("[\\s\\w]*%s[\\s\\w]*", image3ID))
+	c.Assert(out, check.Matches, fmt.Sprintf("[\\s\\w:]*%s[\\s\\w:]*", image1ID))
+	c.Assert(out, check.Matches, fmt.Sprintf("[\\s\\w:]*%s[\\s\\w:]*", image2ID))
+	c.Assert(out, check.Not(check.Matches), fmt.Sprintf("[\\s\\w:]*%s[\\s\\w:]*", image3ID))
 
 	out, _ = dockerCmd(c, "images", "--no-trunc", "-q", "-f", "label=match=me too")
 	out = strings.TrimSpace(out)
@@ -204,7 +202,7 @@ func (s *DockerSuite) TestImagesEnsureOnlyHeadsImagesShown(c *check.C) {
 	// images shouldn't show non-heads images
 	c.Assert(out, checker.Not(checker.Contains), intermediate)
 	// images should contain final built images
-	c.Assert(out, checker.Contains, head[:12])
+	c.Assert(out, checker.Contains, stringid.TruncateID(head))
 }
 
 func (s *DockerSuite) TestImagesEnsureImagesFromScratchShown(c *check.C) {
@@ -219,5 +217,19 @@ func (s *DockerSuite) TestImagesEnsureImagesFromScratchShown(c *check.C) {
 
 	out, _ := dockerCmd(c, "images")
 	// images should contain images built from scratch
-	c.Assert(out, checker.Contains, id[:12])
+	c.Assert(out, checker.Contains, stringid.TruncateID(id))
+}
+
+// #18181
+func (s *DockerSuite) TestImagesFilterNameWithPort(c *check.C) {
+	tag := "a.b.c.d:5000/hello"
+	dockerCmd(c, "tag", "busybox", tag)
+	out, _ := dockerCmd(c, "images", tag)
+	c.Assert(out, checker.Contains, tag)
+
+	out, _ = dockerCmd(c, "images", tag+":latest")
+	c.Assert(out, checker.Contains, tag)
+
+	out, _ = dockerCmd(c, "images", tag+":no-such-tag")
+	c.Assert(out, checker.Not(checker.Contains), tag)
 }

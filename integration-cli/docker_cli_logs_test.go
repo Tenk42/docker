@@ -169,12 +169,13 @@ func (s *DockerSuite) TestLogsFollowStopped(c *check.C) {
 func (s *DockerSuite) TestLogsSince(c *check.C) {
 	testRequires(c, DaemonIsLinux)
 	name := "testlogssince"
-	out, _ := dockerCmd(c, "run", "--name="+name, "busybox", "/bin/sh", "-c", "for i in $(seq 1 3); do sleep 2; echo `date +%s` log$i; done")
+	dockerCmd(c, "run", "--name="+name, "busybox", "/bin/sh", "-c", "for i in $(seq 1 3); do sleep 2; echo log$i; done")
+	out, _ := dockerCmd(c, "logs", "-t", name)
 
 	log2Line := strings.Split(strings.Split(out, "\n")[1], " ")
-	t, err := strconv.ParseInt(log2Line[0], 10, 64) // the timestamp log2 is written
+	t, err := time.Parse(time.RFC3339Nano, log2Line[0]) // the timestamp log2 is written
 	c.Assert(err, checker.IsNil)
-	since := t + 1 // add 1s so log1 & log2 doesn't show up
+	since := t.Unix() + 1 // add 1s so log1 & log2 doesn't show up
 	out, _ = dockerCmd(c, "logs", "-t", fmt.Sprintf("--since=%v", since), name)
 
 	// Skip 2 seconds
@@ -182,6 +183,11 @@ func (s *DockerSuite) TestLogsSince(c *check.C) {
 	for _, v := range unexpected {
 		c.Assert(out, checker.Not(checker.Contains), v, check.Commentf("unexpected log message returned, since=%v", since))
 	}
+
+	// Test to make sure a bad since format is caught by the client
+	out, _, _ = dockerCmdWithError("logs", "-t", "--since=2006-01-02T15:04:0Z", name)
+	c.Assert(out, checker.Contains, "cannot parse \"0Z\" as \"05\"", check.Commentf("bad since format passed to server"))
+
 	// Test with default value specified and parameter omitted
 	expected := []string{"log1", "log2", "log3"}
 	for _, cmd := range []*exec.Cmd{
@@ -343,6 +349,6 @@ func (s *DockerSuite) TestLogsFollowGoroutinesNoOutput(c *check.C) {
 func (s *DockerSuite) TestLogsCLIContainerNotFound(c *check.C) {
 	name := "testlogsnocontainer"
 	out, _, _ := dockerCmdWithError("logs", name)
-	message := fmt.Sprintf(".*no such id: %s.*\n", name)
-	c.Assert(out, checker.Matches, message)
+	message := fmt.Sprintf("Error: No such container: %s\n", name)
+	c.Assert(out, checker.Equals, message)
 }

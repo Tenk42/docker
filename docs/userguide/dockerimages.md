@@ -2,7 +2,7 @@
 +++
 title = "Build your own images"
 description = "How to work with Docker images."
-keywords = ["documentation, docs, the docker guide, docker guide, docker, docker platform, virtualization framework, docker.io, Docker images, Docker image, image management, Docker repos, Docker repositories, docker, docker tag, docker tags, Docker Hub,  collaboration"]
+keywords = ["documentation, docs, the docker guide, docker guide, docker, docker platform, docker.io, Docker images, Docker image, image management, Docker repos, Docker repositories, docker, docker tag, docker tags, Docker Hub,  collaboration"]
 [menu.main]
 parent = "smn_containers"
 weight = -4
@@ -70,9 +70,9 @@ If you don't specify a variant, for example you just use `ubuntu`, then Docker
 will default to using the `ubuntu:latest` image.
 
 > **Tip:**
-> You recommend you always use a specific tagged image, for example
-> `ubuntu:12.04`. That way you always know exactly what variant of an image is
-> being used.
+> You should always specify an image tag, for example `ubuntu:14.04`.
+> That way, you always know exactly what variant of an image you are using.
+> This is useful for troubleshooting and debugging.
 
 ## Getting a new image
 
@@ -504,13 +504,13 @@ unchanged, the digest value is predictable. To list image digest values, use
 the `--digests` flag:
 
     $ docker images --digests | head
-    REPOSITORY                         TAG                 DIGEST                                                                     IMAGE ID            CREATED             VIRTUAL SIZE
-    ouruser/sinatra                    latest              sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf    5db5f8471261        11 hours ago        446.7 MB
+    REPOSITORY        TAG      DIGEST                                                                     IMAGE ID      CREATED       VIRTUAL SIZE
+    ouruser/sinatra   latest   sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf    5db5f8471261  11 hours ago  446.7 MB
 
 When pushing or pulling to a 2.0 registry, the `push` or `pull` command
 output includes the image digest. You can `pull` using a digest value.
 
-    $ docker pull ouruser/sinatra@cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf
+    $ docker pull ouruser/sinatra@sha256:cbbf2f9a99b47fc460d422812b6a5adff7dfee951d8fa2e4a98caa0382cfbdbf
 
 You can also reference by digest in `create`, `run`, and `rmi` commands, as well as the
 `FROM` image reference in a Dockerfile.

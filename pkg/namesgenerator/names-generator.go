@@ -52,7 +52,9 @@ var (
 		"mad",
 		"modest",
 		"naughty",
+		"nauseous",
 		"nostalgic",
+		"pedantic",
 		"pensive",
 		"prickly",
 		"reverent",
@@ -219,6 +221,9 @@ var (
 
 		// Adele Goldstine, born Adele Katz, wrote the complete technical description for the first electronic digital computer, ENIAC. https://en.wikipedia.org/wiki/Adele_Goldstine
 		"goldstine",
+
+		// James Golick, all around gangster.
+		"golick",
 
 		// Jane Goodall - British primatologist, ethologist, and anthropologist who is considered to be the world's foremost expert on chimpanzees - https://en.wikipedia.org/wiki/Jane_Goodall
 		"goodall",

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -20,7 +21,7 @@ import (
 	"github.com/docker/distribution/registry/api/v2"
 	"github.com/docker/distribution/registry/client"
 	"github.com/docker/distribution/registry/client/transport"
-	"github.com/docker/docker/autogen/dockerversion"
+	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/parsers/kernel"
 	"github.com/docker/docker/pkg/tlsconfig"
 	"github.com/docker/docker/pkg/useragent"
@@ -39,9 +40,9 @@ var dockerUserAgent string
 
 func init() {
 	httpVersion := make([]useragent.VersionInfo, 0, 6)
-	httpVersion = append(httpVersion, useragent.VersionInfo{Name: "docker", Version: dockerversion.VERSION})
+	httpVersion = append(httpVersion, useragent.VersionInfo{Name: "docker", Version: dockerversion.Version})
 	httpVersion = append(httpVersion, useragent.VersionInfo{Name: "go", Version: runtime.Version()})
-	httpVersion = append(httpVersion, useragent.VersionInfo{Name: "git-commit", Version: dockerversion.GITCOMMIT})
+	httpVersion = append(httpVersion, useragent.VersionInfo{Name: "git-commit", Version: dockerversion.GitCommit})
 	if kernelVersion, err := kernel.GetKernelVersion(); err == nil {
 		httpVersion = append(httpVersion, useragent.VersionInfo{Name: "kernel", Version: kernelVersion.String()})
 	}
@@ -61,7 +62,7 @@ func newTLSConfig(hostname string, isSecure bool) (*tls.Config, error) {
 
 	tlsConfig.InsecureSkipVerify = !isSecure
 
-	if isSecure {
+	if isSecure && CertsDir != "" {
 		hostDir := filepath.Join(CertsDir, cleanPath(hostname))
 		logrus.Debugf("hostDir: %s", hostDir)
 		if err := ReadCertsDirectory(&tlsConfig, hostDir); err != nil {
@@ -212,6 +213,9 @@ func (e ErrNoSupport) Error() string {
 func ContinueOnError(err error) bool {
 	switch v := err.(type) {
 	case errcode.Errors:
+		if len(v) == 0 {
+			return true
+		}
 		return ContinueOnError(v[0])
 	case ErrNoSupport:
 		return ContinueOnError(v.Err)
@@ -219,6 +223,8 @@ func ContinueOnError(err error) bool {
 		return shouldV2Fallback(v)
 	case *client.UnexpectedHTTPResponseError:
 		return true
+	case error:
+		return !strings.Contains(err.Error(), strings.ToLower(syscall.ENOSPC.Error()))
 	}
 	// let's be nice and fallback if the error is a completely
 	// unexpected one.

@@ -2,9 +2,9 @@ package client
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 
+	"github.com/docker/docker/api/types"
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 )
@@ -15,23 +15,11 @@ import (
 func (cli *DockerCli) CmdRm(args ...string) error {
 	cmd := Cli.Subcmd("rm", []string{"CONTAINER [CONTAINER...]"}, Cli.DockerCommands["rm"].Description, true)
 	v := cmd.Bool([]string{"v", "-volumes"}, false, "Remove the volumes associated with the container")
-	link := cmd.Bool([]string{"l", "#link", "-link"}, false, "Remove the specified link")
+	link := cmd.Bool([]string{"l", "-link"}, false, "Remove the specified link")
 	force := cmd.Bool([]string{"f", "-force"}, false, "Force the removal of a running container (uses SIGKILL)")
 	cmd.Require(flag.Min, 1)
 
 	cmd.ParseFlags(args, true)
-
-	val := url.Values{}
-	if *v {
-		val.Set("v", "1")
-	}
-	if *link {
-		val.Set("link", "1")
-	}
-
-	if *force {
-		val.Set("force", "1")
-	}
 
 	var errNames []string
 	for _, name := range cmd.Args() {
@@ -40,8 +28,14 @@ func (cli *DockerCli) CmdRm(args ...string) error {
 		}
 		name = strings.Trim(name, "/")
 
-		_, _, err := readBody(cli.call("DELETE", "/containers/"+name+"?"+val.Encode(), nil, nil))
-		if err != nil {
+		options := types.ContainerRemoveOptions{
+			ContainerID:   name,
+			RemoveVolumes: *v,
+			RemoveLinks:   *link,
+			Force:         *force,
+		}
+
+		if err := cli.client.ContainerRemove(options); err != nil {
 			fmt.Fprintf(cli.err, "%s\n", err)
 			errNames = append(errNames, name)
 		} else {

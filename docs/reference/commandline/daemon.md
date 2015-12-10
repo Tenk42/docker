@@ -260,11 +260,11 @@ options for `zfs` start with `zfs`.
 *  `dm.fs`
 
     Specifies the filesystem type to use for the base device. The supported
-    options are "ext4" and "xfs". The default is "ext4"
+    options are "ext4" and "xfs". The default is "xfs"
 
     Example use:
 
-        $ docker daemon --storage-opt dm.fs=xfs
+        $ docker daemon --storage-opt dm.fs=ext4
 
 *  `dm.mkfsarg`
 
@@ -446,13 +446,21 @@ single `native.cgroupdriver` option is available.
 
 The `native.cgroupdriver` option specifies the management of the container's
 cgroups. You can specify `cgroupfs` or `systemd`. If you specify `systemd` and
-it is not available, the system uses `cgroupfs`. By default, if no option is
-specified, the execdriver first tries `systemd` and falls back to `cgroupfs`.
-This example sets the execdriver to `cgroupfs`:
+it is not available, the system uses `cgroupfs`. If you omit the
+`native.cgroupdriver` option,` cgroupfs` is used.
+This example sets the `cgroupdriver` to `systemd`:
 
-    $ sudo docker daemon --exec-opt native.cgroupdriver=cgroupfs
+    $ sudo docker daemon --exec-opt native.cgroupdriver=systemd
 
 Setting this option applies to all containers the daemon launches.
+
+Also Windows Container makes use of `--exec-opt` for special purpose. Docker user
+can specify default container isolation technology with this, for example:
+
+    $ docker daemon --exec-opt isolation=hyperv
+
+Will make `hyperv` the default isolation technology on Windows, without specifying
+isolation value on daemon start, Windows isolation technology will default to `process`.
 
 ## Daemon DNS options
 
@@ -564,6 +572,18 @@ docker daemon \
 ```
 
 The currently supported cluster store options are:
+
+*  `discovery.heartbeat`
+
+    Specifies the heartbeat timer in seconds which is used by the daemon as a
+    keepalive mechanism to make sure discovery module treats the node as alive
+    in the cluster. If not configured, the default value is 20 seconds.
+
+*  `discovery.ttl`
+
+    Specifies the ttl (time-to-live) in seconds which is used by the discovery
+    module to timeout a node if a valid heartbeat is not received within the
+    configured ttl value. If not configured, the default value is 60 seconds.
 
 *  `kv.cacertfile`
 

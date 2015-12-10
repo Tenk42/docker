@@ -58,6 +58,7 @@ To build the Docker daemon, you will additionally need:
   2.02.89 or later
 * btrfs-progs version 3.16.1 or later (unless using an older version is
   absolutely necessary, in which case 3.8 is the minimum)
+* yubico-piv-tool version 1.1.0 or later (for experimental)
 
 Be sure to also check out Docker's Dockerfile for the most up-to-date list of
 these build-time dependencies.
@@ -266,7 +267,8 @@ installed and available at runtime:
 
 * iptables version 1.4 or later
 * procps (or similar provider of a "ps" executable)
-* e2fsprogs version 1.4.12 or later (in use: mkfs.ext4, mkfs.xfs, tune2fs)
+* e2fsprogs version 1.4.12 or later (in use: mkfs.ext4, tune2fs)
+* xfsprogs (in use: mkfs.xfs)
 * XZ Utils version 4.9 or later
 * a [properly
   mounted](https://github.com/tianon/cgroupfs-mount/blob/master/cgroupfs-mount)
@@ -302,6 +304,7 @@ by having support for them in the kernel or userspace. A few examples include:
   least the "auplink" utility from aufs-tools)
 * BTRFS graph driver (requires BTRFS support enabled in the kernel)
 * ZFS graph driver (requires userspace zfs-utils and a corresponding kernel module)
+* Libseccomp to allow running seccomp profiles with containers
 
 ## Daemon Init Script
 

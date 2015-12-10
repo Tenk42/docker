@@ -52,15 +52,6 @@ type Terminal interface {
 	Resize(height, width int) error
 }
 
-// ExitStatus provides exit reasons for a container.
-type ExitStatus struct {
-	// The exit code with which the container exited.
-	ExitCode int
-
-	// Whether the container encountered an OOM.
-	OOMKilled bool
-}
-
 // Driver is an interface for drivers to implement
 // including all basic functions a driver should have
 type Driver interface {
@@ -121,18 +112,15 @@ type ResourceStats struct {
 	SystemUsage uint64    `json:"system_usage"`
 }
 
-// ProcessConfig describes a process that will be run inside a container.
-type ProcessConfig struct {
+// CommonProcessConfig is the common platform agnostic part of the ProcessConfig
+// structure that describes a process that will be run inside a container.
+type CommonProcessConfig struct {
 	exec.Cmd `json:"-"`
 
-	Privileged  bool     `json:"privileged"`
-	User        string   `json:"user"`
-	Tty         bool     `json:"tty"`
-	Entrypoint  string   `json:"entrypoint"`
-	Arguments   []string `json:"arguments"`
-	Terminal    Terminal `json:"-"` // standard or tty terminal (Unix)
-	Console     string   `json:"-"` // dev/console path (Unix)
-	ConsoleSize [2]int   `json:"-"` // h,w of initial console size (Windows)
+	Tty        bool     `json:"tty"`
+	Entrypoint string   `json:"entrypoint"`
+	Arguments  []string `json:"arguments"`
+	Terminal   Terminal `json:"-"` // standard or tty terminal
 }
 
 // CommonCommand is the common platform agnostic part of the Command structure
@@ -149,4 +137,5 @@ type CommonCommand struct {
 	Resources     *Resources    `json:"resources"`
 	Rootfs        string        `json:"rootfs"` // root fs of the container
 	WorkingDir    string        `json:"working_dir"`
+	TmpDir        string        `json:"tmpdir"` // Directory used to store docker tmpdirs.
 }

@@ -143,7 +143,7 @@ func (s *DockerTrustSuite) TestTrustedPushWithDeprecatedEnvPasswords(c *check.C)
 	c.Assert(out, checker.Contains, "Signing and pushing trust metadata", check.Commentf("Missing expected output on trusted push"))
 }
 
-func (s *DockerTrustSuite) TestTrustedPushWithFaillingServer(c *check.C) {
+func (s *DockerTrustSuite) TestTrustedPushWithFailingServer(c *check.C) {
 	repoName := fmt.Sprintf("%v/dockercli/trusted:latest", privateRegistryURL)
 	// tag the image and upload it to the private registry
 	dockerCmd(c, "tag", "busybox", repoName)
@@ -227,7 +227,7 @@ func (s *DockerTrustSuite) TestTrustedPushWithIncorrectPassphraseForNonRoot(c *c
 	s.trustedCmdWithPassphrases(pushCmd, "12345678", "87654321")
 	out, _, err = runCommandWithOutput(pushCmd)
 	c.Assert(err, check.NotNil, check.Commentf("Error missing from trusted push with short targets passphrase: \n%s", out))
-	c.Assert(out, checker.Contains, "password invalid, operation has failed", check.Commentf("Missing expected output on trusted push with short targets/snapsnot passphrase"))
+	c.Assert(out, checker.Contains, "could not find necessary signing keys", check.Commentf("Missing expected output on trusted push with short targets/snapsnot passphrase"))
 }
 
 // This test ensures backwards compatibility with old ENV variables. Should be
@@ -249,7 +249,7 @@ func (s *DockerTrustSuite) TestTrustedPushWithIncorrectDeprecatedPassphraseForNo
 	s.trustedCmdWithDeprecatedEnvPassphrases(pushCmd, "12345678", "87654321")
 	out, _, err = runCommandWithOutput(pushCmd)
 	c.Assert(err, check.NotNil, check.Commentf("Error missing from trusted push with short targets passphrase: \n%s", out))
-	c.Assert(out, checker.Contains, "password invalid, operation has failed", check.Commentf("Missing expected output on trusted push with short targets/snapsnot passphrase"))
+	c.Assert(out, checker.Contains, "could not find necessary signing keys", check.Commentf("Missing expected output on trusted push with short targets/snapsnot passphrase"))
 }
 
 func (s *DockerTrustSuite) TestTrustedPushWithExpiredSnapshot(c *check.C) {

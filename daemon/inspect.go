@@ -5,14 +5,29 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types"
+	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/versions/v1p20"
+	"github.com/docker/docker/container"
+	"github.com/docker/docker/daemon/exec"
 	"github.com/docker/docker/daemon/network"
+	"github.com/docker/docker/layer"
+	"github.com/docker/docker/pkg/version"
 )
 
 // ContainerInspect returns low-level information about a
 // container. Returns an error if the container cannot be found, or if
 // there is an error getting the data.
-func (daemon *Daemon) ContainerInspect(name string, size bool) (*types.ContainerJSON, error) {
+func (daemon *Daemon) ContainerInspect(name string, size bool, version version.Version) (interface{}, error) {
+	switch {
+	case version.LessThan("1.20"):
+		return daemon.containerInspectPre120(name)
+	case version.Equal("1.20"):
+		return daemon.containerInspect120(name)
+	}
+	return daemon.containerInspectCurrent(name, size)
+}
+
+func (daemon *Daemon) containerInspectCurrent(name string, size bool) (*types.ContainerJSON, error) {
 	container, err := daemon.Get(name)
 	if err != nil {
 		return nil, err
@@ -51,8 +66,8 @@ func (daemon *Daemon) ContainerInspect(name string, size bool) (*types.Container
 	}, nil
 }
 
-// ContainerInspect120 serializes the master version of a container into a json type.
-func (daemon *Daemon) ContainerInspect120(name string) (*v1p20.ContainerJSON, error) {
+// containerInspect120 serializes the master version of a container into a json type.
+func (daemon *Daemon) containerInspect120(name string) (*v1p20.ContainerJSON, error) {
 	container, err := daemon.Get(name)
 	if err != nil {
 		return nil, err
@@ -72,7 +87,7 @@ func (daemon *Daemon) ContainerInspect120(name string) (*v1p20.ContainerJSON, er
 		MacAddress:      container.Config.MacAddress,
 		NetworkDisabled: container.Config.NetworkDisabled,
 		ExposedPorts:    container.Config.ExposedPorts,
-		VolumeDriver:    container.hostConfig.VolumeDriver,
+		VolumeDriver:    container.HostConfig.VolumeDriver,
 	}
 	networkSettings := daemon.getBackwardsCompatibleNetworkSettings(container.NetworkSettings)
 
@@ -84,9 +99,9 @@ func (daemon *Daemon) ContainerInspect120(name string) (*v1p20.ContainerJSON, er
 	}, nil
 }
 
-func (daemon *Daemon) getInspectData(container *Container, size bool) (*types.ContainerJSONBase, error) {
+func (daemon *Daemon) getInspectData(container *container.Container, size bool) (*types.ContainerJSONBase, error) {
 	// make a copy to play with
-	hostConfig := *container.hostConfig
+	hostConfig := *container.HostConfig
 
 	if children, err := daemon.children(container.Name); err == nil {
 		for linkAlias, child := range children {
@@ -123,14 +138,14 @@ func (daemon *Daemon) getInspectData(container *Container, size bool) (*types.Co
 		Path:         container.Path,
 		Args:         container.Args,
 		State:        containerState,
-		Image:        container.ImageID,
+		Image:        container.ImageID.String(),
 		LogPath:      container.LogPath,
 		Name:         container.Name,
 		RestartCount: container.RestartCount,
 		Driver:       container.Driver,
 		MountLabel:   container.MountLabel,
 		ProcessLabel: container.ProcessLabel,
-		ExecIDs:      container.getExecIDs(),
+		ExecIDs:      container.GetExecIDs(),
 		HostConfig:   &hostConfig,
 	}
 
@@ -148,7 +163,18 @@ func (daemon *Daemon) getInspectData(container *Container, size bool) (*types.Co
 	contJSONBase = setPlatformSpecificContainerFields(container, contJSONBase)
 
 	contJSONBase.GraphDriver.Name = container.Driver
-	graphDriverData, err := daemon.driver.GetMetadata(container.ID)
+
+	image, err := daemon.imageStore.Get(container.ImageID)
+	if err != nil {
+		return nil, err
+	}
+	l, err := daemon.layerStore.Get(image.RootFS.ChainID())
+	if err != nil {
+		return nil, err
+	}
+	defer layer.ReleaseAndLog(daemon.layerStore, l)
+
+	graphDriverData, err := l.Metadata()
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +185,7 @@ func (daemon *Daemon) getInspectData(container *Container, size bool) (*types.Co
 
 // ContainerExecInspect returns low-level information about the exec
 // command. An error is returned if the exec cannot be found.
-func (daemon *Daemon) ContainerExecInspect(id string) (*ExecConfig, error) {
+func (daemon *Daemon) ContainerExecInspect(id string) (*exec.Config, error) {
 	eConfig, err := daemon.getExecConfig(id)
 	if err != nil {
 		return nil, err
@@ -198,7 +224,7 @@ func (daemon *Daemon) getBackwardsCompatibleNetworkSettings(settings *network.Se
 
 // getDefaultNetworkSettings creates the deprecated structure that holds the information
 // about the bridge network for a container.
-func (daemon *Daemon) getDefaultNetworkSettings(networks map[string]*network.EndpointSettings) types.DefaultNetworkSettings {
+func (daemon *Daemon) getDefaultNetworkSettings(networks map[string]*networktypes.EndpointSettings) types.DefaultNetworkSettings {
 	var settings types.DefaultNetworkSettings
 
 	if defaultNetwork, ok := networks["bridge"]; ok {

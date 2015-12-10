@@ -20,9 +20,9 @@ as fast as possible.
 
 Docker consists of:
 
-* The Docker Engine - our lightweight and powerful open source container
-  virtualization technology combined with a work flow for building
-  and containerizing your applications.
+* The Docker Engine - our lightweight and powerful open source containerization
+  technology combined with a work flow for building and containerizing your
+  applications.
 * [Docker Hub](https://hub.docker.com) - our SaaS service for
   sharing and managing your application stacks.
 
@@ -83,14 +83,14 @@ The [Understanding Docker section](../introduction/understanding-docker.md) will
 
 ### Installation guides
 
-The [installation section](../installation) will show you how to install Docker
+The [installation section](../installation/index.md) will show you how to install Docker
 on a variety of platforms.
 
 
 ### Docker user guide
 
 To learn about Docker in more detail and to answer questions about usage and
-implementation, check out the [Docker User Guide](../userguide/).
+implementation, check out the [Docker User Guide](../userguide/index.md).
 
 ## Release notes
 

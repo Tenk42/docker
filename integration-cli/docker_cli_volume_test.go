@@ -11,9 +11,6 @@ import (
 )
 
 func (s *DockerSuite) TestVolumeCliCreate(c *check.C) {
-	if daemonPlatform == "windows" {
-		testRequires(c, WindowsDaemonSupportsVolumes)
-	}
 	dockerCmd(c, "volume", "create")
 
 	_, err := runCommand(exec.Command(dockerBinary, "volume", "create", "-d", "nosuchdriver"))
@@ -25,9 +22,6 @@ func (s *DockerSuite) TestVolumeCliCreate(c *check.C) {
 }
 
 func (s *DockerSuite) TestVolumeCliCreateOptionConflict(c *check.C) {
-	if daemonPlatform == "windows" {
-		testRequires(c, WindowsDaemonSupportsVolumes)
-	}
 	dockerCmd(c, "volume", "create", "--name=test")
 	out, _, err := dockerCmdWithError("volume", "create", "--name", "test", "--driver", "nosuchdriver")
 	c.Assert(err, check.NotNil, check.Commentf("volume create exception name already in use with another driver"))
@@ -40,13 +34,10 @@ func (s *DockerSuite) TestVolumeCliCreateOptionConflict(c *check.C) {
 }
 
 func (s *DockerSuite) TestVolumeCliInspect(c *check.C) {
-	if daemonPlatform == "windows" {
-		testRequires(c, WindowsDaemonSupportsVolumes)
-	}
 	c.Assert(
 		exec.Command(dockerBinary, "volume", "inspect", "doesntexist").Run(),
 		check.Not(check.IsNil),
-		check.Commentf("volume inspect should error on non-existant volume"),
+		check.Commentf("volume inspect should error on non-existent volume"),
 	)
 
 	out, _ := dockerCmd(c, "volume", "create")
@@ -59,11 +50,26 @@ func (s *DockerSuite) TestVolumeCliInspect(c *check.C) {
 	c.Assert(strings.TrimSpace(out), check.Equals, "test")
 }
 
+func (s *DockerSuite) TestVolumeCliInspectMulti(c *check.C) {
+	dockerCmd(c, "volume", "create", "--name", "test1")
+	dockerCmd(c, "volume", "create", "--name", "test2")
+	dockerCmd(c, "volume", "create", "--name", "not-shown")
+
+	out, _, err := dockerCmdWithError("volume", "inspect", "--format='{{ .Name }}'", "test1", "test2", "doesntexist", "not-shown")
+	c.Assert(err, checker.NotNil)
+	outArr := strings.Split(strings.TrimSpace(out), "\n")
+	c.Assert(len(outArr), check.Equals, 3, check.Commentf("\n%s", out))
+
+	c.Assert(out, checker.Contains, "test1")
+	c.Assert(out, checker.Contains, "test2")
+	c.Assert(out, checker.Contains, "Error: No such volume: doesntexist")
+	c.Assert(out, checker.Not(checker.Contains), "not-shown")
+}
+
 func (s *DockerSuite) TestVolumeCliLs(c *check.C) {
 	prefix := ""
 	if daemonPlatform == "windows" {
 		prefix = "c:"
-		testRequires(c, WindowsDaemonSupportsVolumes)
 	}
 	out, _ := dockerCmd(c, "volume", "create")
 	id := strings.TrimSpace(out)
@@ -84,7 +90,6 @@ func (s *DockerSuite) TestVolumeCliLsFilterDangling(c *check.C) {
 	prefix := ""
 	if daemonPlatform == "windows" {
 		prefix = "c:"
-		testRequires(c, WindowsDaemonSupportsVolumes)
 	}
 	dockerCmd(c, "volume", "create", "--name", "testnotinuse1")
 	dockerCmd(c, "volume", "create", "--name", "testisinuse1")
@@ -121,7 +126,6 @@ func (s *DockerSuite) TestVolumeCliRm(c *check.C) {
 	prefix := ""
 	if daemonPlatform == "windows" {
 		prefix = "c:"
-		testRequires(c, WindowsDaemonSupportsVolumes)
 	}
 	out, _ := dockerCmd(c, "volume", "create")
 	id := strings.TrimSpace(out)
@@ -156,7 +160,7 @@ func (s *DockerSuite) TestVolumeCliRm(c *check.C) {
 	c.Assert(
 		exec.Command("volume", "rm", "doesntexist").Run(),
 		check.Not(check.IsNil),
-		check.Commentf("volume rm should fail with non-existant volume"),
+		check.Commentf("volume rm should fail with non-existent volume"),
 	)
 }
 
@@ -176,4 +180,14 @@ func (s *DockerSuite) TestVolumeCliNoArgs(c *check.C) {
 	c.Assert(err, check.NotNil, check.Commentf(stderr))
 	c.Assert(stderr, checker.Contains, usage)
 	c.Assert(stderr, checker.Contains, "flag provided but not defined: --no-such-flag")
+}
+
+func (s *DockerSuite) TestVolumeCliInspectTmplError(c *check.C) {
+	out, _ := dockerCmd(c, "volume", "create")
+	name := strings.TrimSpace(out)
+
+	out, exitCode, err := dockerCmdWithError("volume", "inspect", "--format='{{ .FooBar }}'", name)
+	c.Assert(err, checker.NotNil, check.Commentf("Output: %s", out))
+	c.Assert(exitCode, checker.Equals, 1, check.Commentf("Output: %s", out))
+	c.Assert(out, checker.Contains, "Template parsing error")
 }

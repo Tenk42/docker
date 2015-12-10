@@ -18,6 +18,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fs"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	blkiodev "github.com/opencontainers/runc/libcontainer/configs"
 )
 
 // Mount contains information for a mount operation.
@@ -27,6 +28,7 @@ type Mount struct {
 	Writable    bool   `json:"writable"`
 	Private     bool   `json:"private"`
 	Slave       bool   `json:"slave"`
+	Data        string `json:"data"`
 }
 
 // Resources contains all resource configs for a driver.
@@ -36,15 +38,29 @@ type Resources struct {
 
 	// Fields below here are platform specific
 
-	MemorySwap       int64            `json:"memory_swap"`
-	KernelMemory     int64            `json:"kernel_memory"`
-	CPUQuota         int64            `json:"cpu_quota"`
-	CpusetCpus       string           `json:"cpuset_cpus"`
-	CpusetMems       string           `json:"cpuset_mems"`
-	CPUPeriod        int64            `json:"cpu_period"`
-	Rlimits          []*ulimit.Rlimit `json:"rlimits"`
-	OomKillDisable   bool             `json:"oom_kill_disable"`
-	MemorySwappiness int64            `json:"memory_swappiness"`
+	BlkioWeightDevice           []*blkiodev.WeightDevice   `json:"blkio_weight_device"`
+	BlkioThrottleReadBpsDevice  []*blkiodev.ThrottleDevice `json:"blkio_throttle_read_bps_device"`
+	BlkioThrottleWriteBpsDevice []*blkiodev.ThrottleDevice `json:"blkio_throttle_write_bps_device"`
+	MemorySwap                  int64                      `json:"memory_swap"`
+	KernelMemory                int64                      `json:"kernel_memory"`
+	CPUQuota                    int64                      `json:"cpu_quota"`
+	CpusetCpus                  string                     `json:"cpuset_cpus"`
+	CpusetMems                  string                     `json:"cpuset_mems"`
+	CPUPeriod                   int64                      `json:"cpu_period"`
+	Rlimits                     []*ulimit.Rlimit           `json:"rlimits"`
+	OomKillDisable              bool                       `json:"oom_kill_disable"`
+	MemorySwappiness            int64                      `json:"memory_swappiness"`
+}
+
+// ProcessConfig is the platform specific structure that describes a process
+// that will be run inside a container.
+type ProcessConfig struct {
+	CommonProcessConfig
+
+	// Fields below here are platform specific
+	Privileged bool   `json:"privileged"`
+	User       string `json:"user"`
+	Console    string `json:"-"` // dev/console path
 }
 
 // Ipc settings of the container
@@ -100,9 +116,11 @@ type Command struct {
 	GIDMapping         []idtools.IDMap   `json:"gidmapping"`
 	GroupAdd           []string          `json:"group_add"`
 	Ipc                *Ipc              `json:"ipc"`
+	OomScoreAdj        int               `json:"oom_score_adj"`
 	Pid                *Pid              `json:"pid"`
 	ReadonlyRootfs     bool              `json:"readonly_rootfs"`
 	RemappedRoot       *User             `json:"remap_root"`
+	SeccompProfile     string            `json:"seccomp_profile"`
 	UIDMapping         []idtools.IDMap   `json:"uidmapping"`
 	UTS                *UTS              `json:"uts"`
 }
@@ -148,11 +166,15 @@ func SetupCgroups(container *configs.Config, c *Command) error {
 		container.Cgroups.Memory = c.Resources.Memory
 		container.Cgroups.MemoryReservation = c.Resources.MemoryReservation
 		container.Cgroups.MemorySwap = c.Resources.MemorySwap
+		container.Cgroups.KernelMemory = c.Resources.KernelMemory
 		container.Cgroups.CpusetCpus = c.Resources.CpusetCpus
 		container.Cgroups.CpusetMems = c.Resources.CpusetMems
 		container.Cgroups.CpuPeriod = c.Resources.CPUPeriod
 		container.Cgroups.CpuQuota = c.Resources.CPUQuota
 		container.Cgroups.BlkioWeight = c.Resources.BlkioWeight
+		container.Cgroups.BlkioWeightDevice = c.Resources.BlkioWeightDevice
+		container.Cgroups.BlkioThrottleReadBpsDevice = c.Resources.BlkioThrottleReadBpsDevice
+		container.Cgroups.BlkioThrottleWriteBpsDevice = c.Resources.BlkioThrottleWriteBpsDevice
 		container.Cgroups.OomKillDisable = c.Resources.OomKillDisable
 		container.Cgroups.MemorySwappiness = c.Resources.MemorySwappiness
 	}
@@ -261,4 +283,13 @@ func Stats(containerDir string, containerMemoryLimit int64, machineMemory int64)
 type User struct {
 	UID int `json:"root_uid"`
 	GID int `json:"root_gid"`
+}
+
+// ExitStatus provides exit reasons for a container.
+type ExitStatus struct {
+	// The exit code with which the container exited.
+	ExitCode int
+
+	// Whether the container encountered an OOM.
+	OOMKilled bool
 }

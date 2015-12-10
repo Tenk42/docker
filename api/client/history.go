@@ -1,14 +1,12 @@
 package client
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/docker/docker/api/types"
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/stringid"
@@ -23,20 +21,13 @@ func (cli *DockerCli) CmdHistory(args ...string) error {
 	cmd := Cli.Subcmd("history", []string{"IMAGE"}, Cli.DockerCommands["history"].Description, true)
 	human := cmd.Bool([]string{"H", "-human"}, true, "Print sizes and dates in human readable format")
 	quiet := cmd.Bool([]string{"q", "-quiet"}, false, "Only show numeric IDs")
-	noTrunc := cmd.Bool([]string{"#notrunc", "-no-trunc"}, false, "Don't truncate output")
+	noTrunc := cmd.Bool([]string{"-no-trunc"}, false, "Don't truncate output")
 	cmd.Require(flag.Exact, 1)
 
 	cmd.ParseFlags(args, true)
 
-	serverResp, err := cli.call("GET", "/images/"+cmd.Arg(0)+"/history", nil, nil)
+	history, err := cli.client.ImageHistory(cmd.Arg(0))
 	if err != nil {
-		return err
-	}
-
-	defer serverResp.body.Close()
-
-	history := []types.ImageHistory{}
-	if err := json.NewDecoder(serverResp.body).Decode(&history); err != nil {
 		return err
 	}
 

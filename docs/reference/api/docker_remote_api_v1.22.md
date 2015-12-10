@@ -1,6 +1,5 @@
 <!--[metadata]>
 +++
-draft=true
 title = "Remote API v1.22"
 description = "API Documentation for Docker"
 keywords = ["API, Docker, rcli, REST,  documentation"]
@@ -16,7 +15,7 @@ weight=-3
 
  - The Remote API has replaced `rcli`.
  - The daemon listens on `unix:///var/run/docker.sock` but you can
-   [Bind Docker to another host/port or a Unix socket](../../articles/basics.md#bind-docker-to-another-hostport-or-a-unix-socket).
+   [Bind Docker to another host/port or a Unix socket](../../userguide/basics.md#bind-docker-to-another-host-port-or-a-unix-socket).
  - The API tends to be REST. However, for some complex commands, like `attach`
    or `pull`, the HTTP connection is hijacked to transport `stdout`,
    `stdin` and `stderr`.
@@ -115,9 +114,9 @@ Query Parameters:
         sizes
 -   **filters** - a JSON encoded value of the filters (a `map[string][]string`) to process on the containers list. Available filters:
   -   `exited=<int>`; -- containers with exit code of  `<int>` ;
-  -   `status=`(`created`|`restarting`|`running`|`paused`|`exited`)
+  -   `status=`(`created`|`restarting`|`running`|`paused`|`exited`|`dead`)
   -   `label=key` or `label="key=value"` of a container label
-  -   `isolation=`(`default`|`hyperv`)   (Windows daemon only)
+  -   `isolation=`(`default`|`process`|`hyperv`)   (Windows daemon only)
 
 Status Codes:
 
@@ -188,8 +187,12 @@ Create a container
              "CpusetCpus": "0,1",
              "CpusetMems": "0,1",
              "BlkioWeight": 300,
+             "BlkioWeightDevice": [{}],
+             "BlkioDeviceReadBps": [{}],
+             "BlkioDeviceWriteBps": [{}],
              "MemorySwappiness": 60,
              "OomKillDisable": false,
+             "OomScoreAdj": 500,
              "PortBindings": { "22/tcp": [{ "HostPort": "11022" }] },
              "PublishAllPorts": false,
              "Privileged": false,
@@ -208,7 +211,8 @@ Create a container
              "LogConfig": { "Type": "json-file", "Config": {} },
              "SecurityOpt": [""],
              "CgroupParent": "",
-             "VolumeDriver": ""
+             "VolumeDriver": "",
+             "ShmSize": 67108864
           }
       }
 
@@ -242,8 +246,14 @@ Json Parameters:
 -   **CpusetCpus** - String value containing the `cgroups CpusetCpus` to use.
 -   **CpusetMems** - Memory nodes (MEMs) in which to allow execution (0-3, 0,1). Only effective on NUMA systems.
 -   **BlkioWeight** - Block IO weight (relative weight) accepts a weight value between 10 and 1000.
+-   **BlkioWeightDevice** - Block IO weight (relative device weight) in the form of:        `"BlkioWeightDevice": [{"Path": "device_path", "Weight": weight}]`
+-   **BlkioDeviceReadBps** - Limit read rate from a device in form of:	`"BlkioDeviceReadBps": [{"Path": "device_path", "Rate": rate}]`, for example:
+	`"BlkioDeviceReadBps": [{"Path": "/dev/sda", "Rate": "1024"}]"`
+-   **BlkioDeviceWriteBps** - Limit write rate to a device in the form of:	`"BlkioDeviceWriteBps": [{"Path": "deivce_path", "Rate": rate}]`, for example:
+	`"BlkioDeviceWriteBps": [{"Path": "/dev/sda", "Rate": "1024"}]"`
 -   **MemorySwappiness** - Tune a container's memory swappiness behavior. Accepts an integer between 0 and 100.
 -   **OomKillDisable** - Boolean value, whether to disable OOM Killer for the container or not.
+-   **OomScoreAdj** - An integer value containing the score given to the container in order to tune OOM killer preferences.
 -   **AttachStdin** - Boolean value, attaches to `stdin`.
 -   **AttachStdout** - Boolean value, attaches to `stdout`.
 -   **AttachStderr** - Boolean value, attaches to `stderr`.
@@ -317,6 +327,7 @@ Json Parameters:
           `json-file` logging driver.
     -   **CgroupParent** - Path to `cgroups` under which the container's `cgroup` is created. If the path is not absolute, the path is considered to be relative to the `cgroups` path of the init process. Cgroups are created if they do not already exist.
     -   **VolumeDriver** - Driver that this container users to mount volumes.
+    -   **ShmSize** - Size of `/dev/shm` in bytes. The size must be greater than 0.  If omitted the system uses 64MB.
 
 Query Parameters:
 
@@ -392,6 +403,9 @@ Return low-level information on the container `id`
 		"HostConfig": {
 			"Binds": null,
 			"BlkioWeight": 0,
+			"BlkioWeightDevice": [{}],
+			"BlkioDeviceReadBps": [{}],
+			"BlkioDeviceWriteBps": [{}],
 			"CapAdd": null,
 			"CapDrop": null,
 			"ContainerIDFile": "",
@@ -412,6 +426,7 @@ Return low-level information on the container `id`
 			"MemoryReservation": 0,
 			"KernelMemory": 0,
 			"OomKillDisable": false,
+			"OomScoreAdj": 500,
 			"NetworkMode": "bridge",
 			"PortBindings": {},
 			"Privileged": false,
@@ -428,7 +443,8 @@ Return low-level information on the container `id`
 			"SecurityOpt": null,
 			"VolumesFrom": null,
 			"Ulimits": [{}],
-			"VolumeDriver": ""
+			"VolumeDriver": "",
+			"ShmSize": 67108864
 		},
 		"HostnamePath": "/var/lib/docker/containers/ba033ac4401106a3b513bc9d639eee123ad78ca3616b921167cd74b20e25ed39/hostname",
 		"HostsPath": "/var/lib/docker/containers/ba033ac4401106a3b513bc9d639eee123ad78ca3616b921167cd74b20e25ed39/hosts",
@@ -477,6 +493,7 @@ Return low-level information on the container `id`
 			"ExitCode": 9,
 			"FinishedAt": "2015-01-06T15:47:32.080254511Z",
 			"OOMKilled": false,
+			"Dead": false,
 			"Paused": false,
 			"Pid": 0,
 			"Restarting": false,
@@ -524,7 +541,9 @@ Status Codes:
 
 `GET /containers/(id)/top`
 
-List processes running inside the container `id`
+List processes running inside the container `id`. On Unix systems this
+is done by running the `ps` command. This endpoint is not
+supported on Windows.
 
 **Example request**:
 
@@ -536,28 +555,45 @@ List processes running inside the container `id`
     Content-Type: application/json
 
     {
-         "Titles": [
-                 "USER",
-                 "PID",
-                 "%CPU",
-                 "%MEM",
-                 "VSZ",
-                 "RSS",
-                 "TTY",
-                 "STAT",
-                 "START",
-                 "TIME",
-                 "COMMAND"
-                 ],
-         "Processes": [
-                 ["root","20147","0.0","0.1","18060","1864","pts/4","S","10:06","0:00","bash"],
-                 ["root","20271","0.0","0.0","4312","352","pts/4","S+","10:07","0:00","sleep","10"]
+       "Titles" : [
+         "UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"
+       ],
+       "Processes" : [
+         [
+           "root", "13642", "882", "0", "17:03", "pts/0", "00:00:00", "/bin/bash"
+         ],
+         [
+           "root", "13735", "13642", "0", "17:06", "pts/0", "00:00:00", "sleep 10"
          ]
+       ]
+    }
+
+**Example request**:
+
+    GET /containers/4fa6e0f0c678/top?ps_args=aux HTTP/1.1
+
+**Example response**:
+
+    HTTP/1.1 200 OK
+    Content-Type: application/json
+
+    {
+      "Titles" : [
+        "USER","PID","%CPU","%MEM","VSZ","RSS","TTY","STAT","START","TIME","COMMAND"
+      ]
+      "Processes" : [
+        [
+          "root","13642","0.0","0.1","18172","3184","pts/0","Ss","17:03","0:00","/bin/bash"
+        ],
+        [
+          "root","13895","0.0","0.0","4348","692","pts/0","S+","17:15","0:00","sleep 10"
+        ]
+      ],
     }
 
 Query Parameters:
 
--   **ps_args** – ps arguments to use (e.g., aux)
+-   **ps_args** – `ps` arguments to use (e.g., `aux`), defaults to `-ef`
 
 Status Codes:
 
@@ -1433,6 +1469,7 @@ Query Parameters:
         context for command(s) run via the Dockerfile's `RUN` instruction or for
         variable expansion in other Dockerfile instructions. This is not meant for
         passing secret values. [Read more about the buildargs instruction](../../reference/builder.md#arg)
+-   **shmsize** - Size of `/dev/shm` in bytes. The size must be greater than 0.  If omitted the system uses 64MB.
 
     Request Headers:
 
@@ -1503,7 +1540,24 @@ Query Parameters:
 
     Request Headers:
 
--   **X-Registry-Auth** – base64-encoded AuthConfig object
+-   **X-Registry-Auth** – base64-encoded AuthConfig object, containing either login information, or a token
+    - Credential based login:
+
+        ```
+    {
+            "username": "jdoe",
+            "password": "secret",
+            "email": "jdoe@acme.com",
+    }
+        ```
+
+    - Token based login:
+
+        ```
+    {
+            "registrytoken": "9cbaf023786cd7..."
+    }
+        ```
 
 Status Codes:
 
@@ -1712,8 +1766,24 @@ Query Parameters:
 
 Request Headers:
 
--   **X-Registry-Auth** – Include a base64-encoded AuthConfig.
-        object.
+-   **X-Registry-Auth** – base64-encoded AuthConfig object, containing either login information, or a token
+    - Credential based login:
+
+        ```
+    {
+            "username": "jdoe",
+            "password": "secret",
+            "email": "jdoe@acme.com",
+    }
+        ```
+
+    - Token based login:
+
+        ```
+    {
+            "registrytoken": "9cbaf023786cd7..."
+    }
+        ```
 
 Status Codes:
 
@@ -1881,6 +1951,7 @@ Display system-wide information
     Content-Type: application/json
 
     {
+        "Architecture": "x86_64",
         "Containers": 11,
         "CpuCfsPeriod": true,
         "CpuCfsQuota": true,
@@ -1889,6 +1960,16 @@ Display system-wide information
         "DockerRootDir": "/var/lib/docker",
         "Driver": "btrfs",
         "DriverStatus": [[""]],
+        "Plugins": {
+            "Volume": [
+                "local"
+            ],
+            "Network": [
+                "null",
+                "host",
+                "bridge"
+            ]
+        },
         "ExecutionDriver": "native-0.1",
         "ExperimentalBuild": false,
         "HttpProxy": "http://test:test@localhost:8080",
@@ -1912,6 +1993,8 @@ Display system-wide information
         "Name": "prod-server-42",
         "NoProxy": "9.81.1.160",
         "OomKillDisable": true,
+        "OSType": "linux",
+        "OomScoreAdj": 500,
         "OperatingSystem": "Boot2Docker",
         "RegistryConfig": {
             "IndexConfigs": {
@@ -1952,14 +2035,15 @@ Show the docker version information
     Content-Type: application/json
 
     {
-         "Version": "1.5.0",
+         "Version": "1.10.0-dev",
          "Os": "linux",
-         "KernelVersion": "3.18.5-tinycore64",
-         "GoVersion": "go1.4.1",
-         "GitCommit": "a8a31ef",
+         "KernelVersion": "3.19.0-23-generic",
+         "GoVersion": "go1.4.2",
+         "GitCommit": "e75da4b",
          "Arch": "amd64",
-         "ApiVersion": "1.20",
-         "Experimental": false
+         "ApiVersion": "1.22",
+         "BuildTime": "2015-12-01T07:09:13.444803460+00:00",
+         "Experimental": true
     }
 
 Status Codes:
@@ -2251,6 +2335,8 @@ Status Codes:
 
 -   **201** – no error
 -   **404** – no such container
+-   **409** - container is paused
+-   **500** - server error
 
 ### Exec Start
 
@@ -2286,7 +2372,7 @@ Status Codes:
 
 -   **200** – no error
 -   **404** – no such exec instance
--   **409** - container is stopped or paused
+-   **409** - container is paused
 
     **Stream details**:
     Similar to the stream behavior of `POST /container/(id)/attach` API
@@ -2678,6 +2764,7 @@ Content-Type: application/json
   },
   "Containers": {
     "39b69226f9d79f5634485fb236a23b2fe4e96a0a94128390a7fbbcc167065867": {
+      "Name": "mad_mclean",
       "EndpointID": "ed2419a97c1d9954d05b46e462e7002ea552f216e9b136b80a7db8d98b442eda",
       "MacAddress": "02:42:ac:11:00:02",
       "IPv4Address": "172.17.0.2/16",

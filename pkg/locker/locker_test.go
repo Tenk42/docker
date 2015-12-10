@@ -1,8 +1,9 @@
 package locker
 
 import (
-	"runtime"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestLockCounter(t *testing.T) {
@@ -34,7 +35,21 @@ func TestLockerLock(t *testing.T) {
 		close(chDone)
 	}()
 
-	runtime.Gosched()
+	chWaiting := make(chan struct{})
+	go func() {
+		for range time.Tick(1 * time.Millisecond) {
+			if ctr.count() == 1 {
+				close(chWaiting)
+				break
+			}
+		}
+	}()
+
+	select {
+	case <-chWaiting:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for lock waiters to be incremented")
+	}
 
 	select {
 	case <-chDone:
@@ -42,25 +57,14 @@ func TestLockerLock(t *testing.T) {
 	default:
 	}
 
-	if ctr.count() != 1 {
-		t.Fatalf("expected waiters to be 1, got: %d", ctr.count())
-	}
-
 	if err := l.Unlock("test"); err != nil {
 		t.Fatal(err)
 	}
-	runtime.Gosched()
 
 	select {
 	case <-chDone:
-	default:
-		// one more time just to be sure
-		runtime.Gosched()
-		select {
-		case <-chDone:
-		default:
-			t.Fatalf("lock should have completed")
-		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("lock should have completed")
 	}
 
 	if ctr.count() != 0 {
@@ -80,11 +84,41 @@ func TestLockerUnlock(t *testing.T) {
 		close(chDone)
 	}()
 
-	runtime.Gosched()
+	select {
+	case <-chDone:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("lock should not be blocked")
+	}
+}
+
+func TestLockerConcurrency(t *testing.T) {
+	l := New()
+
+	var wg sync.WaitGroup
+	for i := 0; i <= 10000; i++ {
+		wg.Add(1)
+		go func() {
+			l.Lock("test")
+			// if there is a concurrency issue, will very likely panic here
+			l.Unlock("test")
+			wg.Done()
+		}()
+	}
+
+	chDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(chDone)
+	}()
 
 	select {
 	case <-chDone:
-	default:
-		t.Fatalf("lock should not be blocked")
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for locks to complete")
+	}
+
+	// Since everything has unlocked this should not exist anymore
+	if ctr, exists := l.locks["test"]; exists {
+		t.Fatalf("lock should not exist: %v", ctr)
 	}
 }

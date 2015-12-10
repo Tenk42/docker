@@ -1,12 +1,17 @@
 package client
 
 import (
+	"errors"
 	"fmt"
-	"net/url"
+	"io"
 
+	"github.com/docker/distribution/reference"
+	"github.com/docker/docker/api/client/lib"
+	"github.com/docker/docker/api/types"
 	Cli "github.com/docker/docker/cli"
+	"github.com/docker/docker/cliconfig"
+	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/pkg/parsers"
 	"github.com/docker/docker/registry"
 )
 
@@ -20,10 +25,21 @@ func (cli *DockerCli) CmdPush(args ...string) error {
 
 	cmd.ParseFlags(args, true)
 
-	remote, tag := parsers.ParseRepositoryTag(cmd.Arg(0))
+	ref, err := reference.ParseNamed(cmd.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	var tag string
+	switch x := ref.(type) {
+	case reference.Digested:
+		return errors.New("cannot push a digest reference")
+	case reference.Tagged:
+		tag = x.Tag()
+	}
 
 	// Resolve the Repository name from fqn to RepositoryInfo
-	repoInfo, err := registry.ParseRepositoryInfo(remote)
+	repoInfo, err := registry.ParseRepositoryInfo(ref)
 	if err != nil {
 		return err
 	}
@@ -41,13 +57,30 @@ func (cli *DockerCli) CmdPush(args ...string) error {
 		return fmt.Errorf("You cannot push a \"root\" repository. Please rename your repository to <user>/<repo> (ex: %s/%s)", username, repoInfo.LocalName)
 	}
 
+	requestPrivilege := cli.registryAuthenticationPrivilegedFunc(repoInfo.Index, "push")
 	if isTrusted() {
-		return cli.trustedPush(repoInfo, tag, authConfig)
+		return cli.trustedPush(repoInfo, tag, authConfig, requestPrivilege)
 	}
 
-	v := url.Values{}
-	v.Set("tag", tag)
+	return cli.imagePushPrivileged(authConfig, ref.Name(), tag, cli.out, requestPrivilege)
+}
 
-	_, _, err = cli.clientRequestAttemptLogin("POST", "/images/"+remote+"/push?"+v.Encode(), nil, cli.out, repoInfo.Index, "push")
-	return err
+func (cli *DockerCli) imagePushPrivileged(authConfig cliconfig.AuthConfig, imageID, tag string, outputStream io.Writer, requestPrivilege lib.RequestPrivilegeFunc) error {
+	encodedAuth, err := authConfig.EncodeToBase64()
+	if err != nil {
+		return err
+	}
+	options := types.ImagePushOptions{
+		ImageID:      imageID,
+		Tag:          tag,
+		RegistryAuth: encodedAuth,
+	}
+
+	responseBody, err := cli.client.ImagePush(options, requestPrivilege)
+	if err != nil {
+		return err
+	}
+	defer responseBody.Close()
+
+	return jsonmessage.DisplayJSONMessagesStream(responseBody, outputStream, cli.outFd, cli.isTerminalOut)
 }

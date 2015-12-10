@@ -524,6 +524,18 @@ func TestParseModes(t *testing.T) {
 	if !hostconfig.UTSMode.Valid() {
 		t.Fatalf("Expected a valid UTSMode, got %v", hostconfig.UTSMode)
 	}
+	// shm-size ko
+	if _, _, _, err = parseRun([]string{"--shm-size=a128m", "img", "cmd"}); err == nil || err.Error() != "invalid size: 'a128m'" {
+		t.Fatalf("Expected an error with message 'invalid size: a128m', got %v", err)
+	}
+	// shm-size ok
+	_, hostconfig, _, err = parseRun([]string{"--shm-size=128m", "img", "cmd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *hostconfig.ShmSize != 134217728 {
+		t.Fatalf("Expected a valid ShmSize, got %d", *hostconfig.ShmSize)
+	}
 }
 
 func TestParseRestartPolicy(t *testing.T) {

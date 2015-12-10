@@ -111,7 +111,7 @@ and choosing "Open" from the pop-up menu.
 
 To run a Docker container, you:
 
-* create a new (or start an existing) Docker virtual machine
+* create a new (or start an existing) virtual machine that runs Docker.
 * switch your environment to your new VM
 * use the `docker` client to create, load, and manage containers
 
@@ -425,6 +425,6 @@ Use `docker-machine help` to list the full command line reference for Docker Mac
 information about using SSH or SCP to access a VM, see [the Docker Machine
 documentation](https://docs.docker.com/machine/).
 
-You can continue with the [Docker User Guide](../userguide). If you are
+You can continue with the [Docker User Guide](../userguide/index.md). If you are
 interested in using the Kitematic GUI, see the [Kitematic user
 guide](https://docs.docker.com/kitematic/userguide/).
