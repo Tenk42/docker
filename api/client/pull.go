@@ -4,18 +4,16 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/docker/distribution/reference"
-	"github.com/docker/docker/api/client/lib"
-	"github.com/docker/docker/api/types"
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
-	"github.com/docker/docker/cliconfig"
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
+	"github.com/docker/docker/reference"
 	"github.com/docker/docker/registry"
-	tagpkg "github.com/docker/docker/tag"
+	"github.com/docker/engine-api/client"
+	"github.com/docker/engine-api/types"
 )
-
-var errTagCantBeUsed = errors.New("tag can't be used with --all-tags/-a")
 
 // CmdPull pulls an image or a repository from the registry.
 //
@@ -33,28 +31,21 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	if err != nil {
 		return err
 	}
+	if *allTags && !reference.IsNameOnly(distributionRef) {
+		return errors.New("tag can't be used with --all-tags/-a")
+	}
+
+	if !*allTags && reference.IsNameOnly(distributionRef) {
+		distributionRef = reference.WithDefaultTag(distributionRef)
+		fmt.Fprintf(cli.out, "Using default tag: %s\n", reference.DefaultTag)
+	}
 
 	var tag string
 	switch x := distributionRef.(type) {
-	case reference.Digested:
-		if *allTags {
-			return errTagCantBeUsed
-		}
+	case reference.Canonical:
 		tag = x.Digest().String()
-	case reference.Tagged:
-		if *allTags {
-			return errTagCantBeUsed
-		}
+	case reference.NamedTagged:
 		tag = x.Tag()
-	default:
-		if !*allTags {
-			tag = tagpkg.DefaultTag
-			distributionRef, err = reference.WithTag(distributionRef, tag)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cli.out, "Using default tag: %s\n", tag)
-		}
 	}
 
 	ref := registry.ParseReference(tag)
@@ -65,7 +56,7 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 		return err
 	}
 
-	authConfig := registry.ResolveAuthConfig(cli.configFile, repoInfo.Index)
+	authConfig := cli.resolveAuthConfig(cli.configFile.AuthConfigs, repoInfo.Index)
 	requestPrivilege := cli.registryAuthenticationPrivilegedFunc(repoInfo.Index, "pull")
 
 	if isTrusted() && !ref.HasDigest() {
@@ -76,9 +67,9 @@ func (cli *DockerCli) CmdPull(args ...string) error {
 	return cli.imagePullPrivileged(authConfig, distributionRef.String(), "", requestPrivilege)
 }
 
-func (cli *DockerCli) imagePullPrivileged(authConfig cliconfig.AuthConfig, imageID, tag string, requestPrivilege lib.RequestPrivilegeFunc) error {
+func (cli *DockerCli) imagePullPrivileged(authConfig types.AuthConfig, imageID, tag string, requestPrivilege client.RequestPrivilegeFunc) error {
 
-	encodedAuth, err := authConfig.EncodeToBase64()
+	encodedAuth, err := encodeAuthToBase64(authConfig)
 	if err != nil {
 		return err
 	}
@@ -88,11 +79,11 @@ func (cli *DockerCli) imagePullPrivileged(authConfig cliconfig.AuthConfig, image
 		RegistryAuth: encodedAuth,
 	}
 
-	responseBody, err := cli.client.ImagePull(options, requestPrivilege)
+	responseBody, err := cli.client.ImagePull(context.Background(), options, requestPrivilege)
 	if err != nil {
 		return err
 	}
 	defer responseBody.Close()
 
-	return jsonmessage.DisplayJSONMessagesStream(responseBody, cli.out, cli.outFd, cli.isTerminalOut)
+	return jsonmessage.DisplayJSONMessagesStream(responseBody, cli.out, cli.outFd, cli.isTerminalOut, nil)
 }

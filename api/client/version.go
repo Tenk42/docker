@@ -1,11 +1,15 @@
 package client
 
 import (
+	"runtime"
 	"text/template"
 	"time"
 
 	Cli "github.com/docker/docker/cli"
+	"github.com/docker/docker/dockerversion"
 	flag "github.com/docker/docker/pkg/mflag"
+	"github.com/docker/docker/utils"
+	"github.com/docker/engine-api/types"
 )
 
 var versionTemplate = `Client:
@@ -49,7 +53,23 @@ func (cli *DockerCli) CmdVersion(args ...string) (err error) {
 			Status: "Template parsing error: " + err.Error()}
 	}
 
-	vd, err := cli.client.SystemVersion()
+	vd := types.VersionResponse{
+		Client: &types.Version{
+			Version:      dockerversion.Version,
+			APIVersion:   cli.client.ClientVersion(),
+			GoVersion:    runtime.Version(),
+			GitCommit:    dockerversion.GitCommit,
+			BuildTime:    dockerversion.BuildTime,
+			Os:           runtime.GOOS,
+			Arch:         runtime.GOARCH,
+			Experimental: utils.ExperimentalBuild(),
+		},
+	}
+
+	serverVersion, err := cli.client.ServerVersion()
+	if err == nil {
+		vd.Server = &serverVersion
+	}
 
 	// first we need to make BuildTime more human friendly
 	t, errTime := time.Parse(time.RFC3339Nano, vd.Client.BuildTime)

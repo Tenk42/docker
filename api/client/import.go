@@ -5,14 +5,15 @@ import (
 	"io"
 	"os"
 
-	"github.com/docker/distribution/reference"
-	"github.com/docker/docker/api/types"
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/jsonmessage"
 	flag "github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/urlutil"
-	"github.com/docker/docker/registry"
+	"github.com/docker/docker/reference"
+	"github.com/docker/engine-api/types"
 )
 
 // CmdImport creates an empty filesystem image, imports the contents of the tarball into the image, and optionally tags the image.
@@ -45,11 +46,7 @@ func (cli *DockerCli) CmdImport(args ...string) error {
 
 	if repository != "" {
 		//Check if the given image name can be resolved
-		ref, err := reference.ParseNamed(repository)
-		if err != nil {
-			return err
-		}
-		if err := registry.ValidateRepositoryName(ref); err != nil {
+		if _, err := reference.ParseNamed(repository); err != nil {
 			return err
 		}
 	}
@@ -64,7 +61,6 @@ func (cli *DockerCli) CmdImport(args ...string) error {
 		}
 		defer file.Close()
 		in = file
-
 	}
 
 	options := types.ImageImportOptions{
@@ -76,11 +72,11 @@ func (cli *DockerCli) CmdImport(args ...string) error {
 		Changes:        changes,
 	}
 
-	responseBody, err := cli.client.ImageImport(options)
+	responseBody, err := cli.client.ImageImport(context.Background(), options)
 	if err != nil {
 		return err
 	}
 	defer responseBody.Close()
 
-	return jsonmessage.DisplayJSONMessagesStream(responseBody, cli.out, cli.outFd, cli.isTerminalOut)
+	return jsonmessage.DisplayJSONMessagesStream(responseBody, cli.out, cli.outFd, cli.isTerminalOut, nil)
 }

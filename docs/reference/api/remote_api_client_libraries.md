@@ -4,7 +4,8 @@ title = "Remote API client libraries"
 description = "Various client libraries available to use with the Docker remote API"
 keywords = ["API, Docker, index, registry, REST, documentation, clients, C#, Erlang, Go, Groovy, Java, JavaScript, Perl, PHP, Python, Ruby, Rust,  Scala"]
 [menu.main]
-parent="mn_reference"
+parent="engine_remoteapi"
+weight = 90
 +++
 <![end-metadata]-->
 
@@ -53,6 +54,12 @@ will add the libraries here.
       <td>Dart</td>
       <td>bwu_docker</td>
       <td><a class="reference external" href="https://github.com/bwu-dart/bwu_docker">https://github.com/bwu-dart/bwu_docker</a></td>
+      <td>Active</td>
+    </tr>
+    <tr>
+      <td>Go</td>
+      <td>engine-api</td>
+      <td><a class="reference external" href="https://github.com/docker/engine-api">https://github.com/docker/engine-api</a></td>
       <td>Active</td>
     </tr>
     <tr>
@@ -117,6 +124,12 @@ will add the libraries here.
     </tr>
     <tr>
       <td>JavaScript (NodeJS)</td>
+      <td>dockerizer</td>
+      <td><a class="reference external" href="https://github.com/kesarion/dockerizer">https://github.com/kesarion/dockerizer</a></td>
+      <td>Active</td>
+    </tr>
+    <tr>
+      <td>JavaScript (NodeJS)</td>
       <td>dockerode</td>
       <td><a class="reference external" href="https://github.com/apocas/dockerode">https://github.com/apocas/dockerode</a>
   Install via NPM: <cite>npm install dockerode</cite></td>
@@ -140,7 +153,7 @@ will add the libraries here.
       <td>Albatros</td>
       <td><a class="reference external" href="https://github.com/dcylabs/albatros">https://github.com/dcylabs/albatros</a></td>
       <td>Active</td>
-    </tr>    
+    </tr>
     <tr>
       <td>JavaScript (Angular) <strong>WebUI</strong></td>
       <td>docker-cp</td>
@@ -158,7 +171,7 @@ will add the libraries here.
       <td>dockery</td>
       <td><a class="reference external" href="https://github.com/lexandro/dockery">https://github.com/lexandro/dockery</a></td>
       <td>Active</td>
-    </tr>    
+    </tr>
     <tr>
       <td>Perl</td>
       <td>Net::Docker</td>
@@ -180,7 +193,13 @@ will add the libraries here.
     <tr>
       <td>PHP</td>
       <td>Docker-PHP</td>
-      <td><a class="reference external" href="http://stage1.github.io/docker-php/">http://stage1.github.io/docker-php/</a></td>
+      <td><a class="reference external" href="https://github.com/docker-php/docker-php">https://github.com/docker-php/docker-php</a></td>
+      <td>Active</td>
+    </tr>
+    <tr>
+      <td>PHP</td>
+      <td>Docker-PHP-Client</td>
+      <td><a class="reference external" href="https://github.com/jarkt/docker-php-client">https://github.com/jarkt/docker-php-client</a></td>
       <td>Active</td>
     </tr>
     <tr>
@@ -208,6 +227,12 @@ will add the libraries here.
       <td>Active</td>
     </tr>
     <tr>
+      <td>Rust</td>
+      <td>shiplift</td>
+      <td><a class="reference external" href="https://github.com/softprops/shiplift">https://github.com/softprops/shiplift</a></td>
+      <td>Active</td>
+    </tr>
+    <tr>
       <td>Scala</td>
       <td>tugboat</td>
       <td><a class="reference external" href="https://github.com/softprops/tugboat">https://github.com/softprops/tugboat</a></td>
@@ -221,4 +246,3 @@ will add the libraries here.
     </tr>
   </tbody>
 </table>
-

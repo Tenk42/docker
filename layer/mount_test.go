@@ -11,7 +11,7 @@ import (
 )
 
 func TestMountInit(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	basefile := newTestFile("testfile.txt", []byte("base data!"), 0644)
@@ -27,12 +27,12 @@ func TestMountInit(t *testing.T) {
 		return initfile.ApplyFile(root)
 	}
 
-	m, err := ls.Mount("fun-mount", layer.ChainID(), "", mountInit)
+	m, err := ls.CreateRWLayer("fun-mount", layer.ChainID(), "", mountInit)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := m.Path()
+	path, err := m.Mount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestMountInit(t *testing.T) {
 }
 
 func TestMountSize(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	content1 := []byte("Base contents")
@@ -80,12 +80,12 @@ func TestMountSize(t *testing.T) {
 		return newTestFile("file-init", contentInit, 0777).ApplyFile(root)
 	}
 
-	m, err := ls.Mount("mount-size", layer.ChainID(), "", mountInit)
+	m, err := ls.CreateRWLayer("mount-size", layer.ChainID(), "", mountInit)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := m.Path()
+	path, err := m.Mount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestMountSize(t *testing.T) {
 }
 
 func TestMountChanges(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	basefiles := []FileApplier{
@@ -125,12 +125,12 @@ func TestMountChanges(t *testing.T) {
 		return initfile.ApplyFile(root)
 	}
 
-	m, err := ls.Mount("mount-changes", layer.ChainID(), "", mountInit)
+	m, err := ls.CreateRWLayer("mount-changes", layer.ChainID(), "", mountInit)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := m.Path()
+	path, err := m.Mount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestMountChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := ls.Changes("mount-changes")
+	changes, err := m.Changes()
 	if err != nil {
 		t.Fatal(err)
 	}

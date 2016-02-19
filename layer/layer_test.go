@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/docker/distribution/digest"
@@ -56,7 +57,7 @@ func newTestGraphDriver(t *testing.T) (graphdriver.Driver, func()) {
 	}
 }
 
-func newTestStore(t *testing.T) (Store, func()) {
+func newTestStore(t *testing.T) (Store, string, func()) {
 	td, err := ioutil.TempDir("", "layerstore-")
 	if err != nil {
 		t.Fatal(err)
@@ -67,12 +68,12 @@ func newTestStore(t *testing.T) (Store, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ls, err := NewStore(fms, graph)
+	ls, err := NewStoreFromGraphDriver(fms, graph)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return ls, func() {
+	return ls, td, func() {
 		graphcleanup()
 		os.RemoveAll(td)
 	}
@@ -82,12 +83,12 @@ type layerInit func(root string) error
 
 func createLayer(ls Store, parent ChainID, layerFunc layerInit) (Layer, error) {
 	containerID := stringid.GenerateRandomID()
-	mount, err := ls.Mount(containerID, parent, "", nil)
+	mount, err := ls.CreateRWLayer(containerID, parent, "", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	path, err := mount.Path()
+	path, err := mount.Mount("")
 	if err != nil {
 		return nil, err
 	}
@@ -107,11 +108,11 @@ func createLayer(ls Store, parent ChainID, layerFunc layerInit) (Layer, error) {
 		return nil, err
 	}
 
-	if err := ls.Unmount(containerID); err != nil {
+	if err := mount.Unmount(); err != nil {
 		return nil, err
 	}
 
-	if _, err := ls.DeleteMount(containerID); err != nil {
+	if _, err := ls.ReleaseRWLayer(mount); err != nil {
 		return nil, err
 	}
 
@@ -169,6 +170,13 @@ func getCachedLayer(l Layer) *roLayer {
 		return rl.roLayer
 	}
 	return l.(*roLayer)
+}
+
+func getMountLayer(l RWLayer) *mountedLayer {
+	if rl, ok := l.(*referencedRWLayer); ok {
+		return rl.mountedLayer
+	}
+	return l.(*mountedLayer)
 }
 
 func createMetadata(layers ...Layer) []Metadata {
@@ -258,7 +266,7 @@ func assertLayerEqual(t *testing.T, l1, l2 Layer) {
 }
 
 func TestMountAndRegister(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	li := initWithFiles(newTestFile("testfile.txt", []byte("some test data"), 0644))
@@ -270,12 +278,12 @@ func TestMountAndRegister(t *testing.T) {
 	size, _ := layer.Size()
 	t.Logf("Layer size: %d", size)
 
-	mount2, err := ls.Mount("new-test-mount", layer.ChainID(), "", nil)
+	mount2, err := ls.CreateRWLayer("new-test-mount", layer.ChainID(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path2, err := mount2.Path()
+	path2, err := mount2.Mount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,17 +297,17 @@ func TestMountAndRegister(t *testing.T) {
 		t.Fatalf("Wrong file data, expected %q, got %q", expected, string(b))
 	}
 
-	if err := ls.Unmount("new-test-mount"); err != nil {
+	if err := mount2.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := ls.DeleteMount("new-test-mount"); err != nil {
+	if _, err := ls.ReleaseRWLayer(mount2); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLayerRelease(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	layer1, err := createLayer(ls, "", initWithFiles(newTestFile("layer1.txt", []byte("layer 1 file"), 0644)))
@@ -344,7 +352,7 @@ func TestLayerRelease(t *testing.T) {
 }
 
 func TestStoreRestore(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	layer1, err := createLayer(ls, "", initWithFiles(newTestFile("layer1.txt", []byte("layer 1 file"), 0644)))
@@ -370,12 +378,12 @@ func TestStoreRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m, err := ls.Mount("some-mount_name", layer3.ChainID(), "", nil)
+	m, err := ls.CreateRWLayer("some-mount_name", layer3.ChainID(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path, err := m.Path()
+	path, err := m.Mount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,12 +391,15 @@ func TestStoreRestore(t *testing.T) {
 	if err := ioutil.WriteFile(filepath.Join(path, "testfile.txt"), []byte("nothing here"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	assertActivityCount(t, m, 1)
 
-	if err := ls.Unmount("some-mount_name"); err != nil {
+	if err := m.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 
-	ls2, err := NewStore(ls.(*layerStore).store, ls.(*layerStore).driver)
+	assertActivityCount(t, m, 0)
+
+	ls2, err := NewStoreFromGraphDriver(ls.(*layerStore).store, ls.(*layerStore).driver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,18 +411,39 @@ func TestStoreRestore(t *testing.T) {
 
 	assertLayerEqual(t, layer3b, layer3)
 
-	// Mount again with same name, should already be loaded
-	m2, err := ls2.Mount("some-mount_name", layer3b.ChainID(), "", nil)
+	// Create again with same name, should return error
+	if _, err := ls2.CreateRWLayer("some-mount_name", layer3b.ChainID(), "", nil); err == nil {
+		t.Fatal("Expected error creating mount with same name")
+	} else if err != ErrMountNameConflict {
+		t.Fatal(err)
+	}
+
+	m2, err := ls2.GetRWLayer("some-mount_name")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	path2, err := m2.Path()
-	if err != nil {
+	if mountPath, err := m2.Mount(""); err != nil {
+		t.Fatal(err)
+	} else if path != mountPath {
+		t.Fatalf("Unexpected path %s, expected %s", mountPath, path)
+	}
+
+	assertActivityCount(t, m2, 1)
+
+	if mountPath, err := m2.Mount(""); err != nil {
+		t.Fatal(err)
+	} else if path != mountPath {
+		t.Fatalf("Unexpected path %s, expected %s", mountPath, path)
+	}
+	assertActivityCount(t, m2, 2)
+	if err := m2.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 
-	b, err := ioutil.ReadFile(filepath.Join(path2, "testfile.txt"))
+	assertActivityCount(t, m2, 1)
+
+	b, err := ioutil.ReadFile(filepath.Join(path, "testfile.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,11 +451,19 @@ func TestStoreRestore(t *testing.T) {
 		t.Fatalf("Unexpected content %q, expected %q", string(b), expected)
 	}
 
-	if err := ls2.Unmount("some-mount_name"); err != nil {
+	if err := m2.Unmount(); err != nil {
 		t.Fatal(err)
 	}
 
-	if metadata, err := ls2.DeleteMount("some-mount_name"); err != nil {
+	assertActivityCount(t, m2, 0)
+
+	if metadata, err := ls2.ReleaseRWLayer(m2); err != nil {
+		t.Fatal(err)
+	} else if len(metadata) != 0 {
+		t.Fatalf("Unexpectedly deleted layers: %#v", metadata)
+	}
+
+	if metadata, err := ls2.ReleaseRWLayer(m2); err != nil {
 		t.Fatal(err)
 	} else if len(metadata) != 0 {
 		t.Fatalf("Unexpectedly deleted layers: %#v", metadata)
@@ -433,7 +473,7 @@ func TestStoreRestore(t *testing.T) {
 }
 
 func TestTarStreamStability(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	files1 := []FileApplier{
@@ -509,10 +549,7 @@ func TestTarStreamStability(t *testing.T) {
 }
 
 func assertLayerDiff(t *testing.T, expected []byte, layer Layer) {
-	expectedDigest, err := digest.FromBytes(expected)
-	if err != nil {
-		t.Fatal(err)
-	}
+	expectedDigest := digest.FromBytes(expected)
 
 	if digest.Digest(layer.DiffID()) != expectedDigest {
 		t.Fatalf("Mismatched diff id for %s, got %s, expected %s", layer.ChainID(), layer.DiffID(), expected)
@@ -534,10 +571,7 @@ func assertLayerDiff(t *testing.T, expected []byte, layer Layer) {
 		t.Fatalf("Mismatched tar stream size for %s, got %d, expected %d", layer.ChainID(), len(actual), len(expected))
 	}
 
-	actualDigest, err := digest.FromBytes(actual)
-	if err != nil {
-		t.Fatal(err)
-	}
+	actualDigest := digest.FromBytes(actual)
 
 	if actualDigest != expectedDigest {
 		logByteDiff(t, actual, expected)
@@ -627,8 +661,15 @@ func assertReferences(t *testing.T, references ...Layer) {
 	}
 }
 
+func assertActivityCount(t *testing.T, l RWLayer, expected int) {
+	rl := l.(*referencedRWLayer)
+	if rl.activityCount != expected {
+		t.Fatalf("Unexpected activity count %d, expected %d", rl.activityCount, expected)
+	}
+}
+
 func TestRegisterExistingLayer(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+	ls, _, cleanup := newTestStore(t)
 	defer cleanup()
 
 	baseFiles := []FileApplier{
@@ -663,65 +704,68 @@ func TestRegisterExistingLayer(t *testing.T) {
 	assertReferences(t, layer2a, layer2b)
 }
 
-func graphDiffSize(ls Store, l Layer) (int64, error) {
-	cl := getCachedLayer(l)
-	var parent string
-	if cl.parent != nil {
-		parent = cl.parent.cacheID
-	}
-	return ls.(*layerStore).driver.DiffSize(cl.cacheID, parent)
-}
-
-func TestLayerSize(t *testing.T) {
-	ls, cleanup := newTestStore(t)
+func TestTarStreamVerification(t *testing.T) {
+	ls, tmpdir, cleanup := newTestStore(t)
 	defer cleanup()
 
-	content1 := []byte("Base contents")
-	content2 := []byte("Added contents")
+	files1 := []FileApplier{
+		newTestFile("/foo", []byte("abc"), 0644),
+		newTestFile("/bar", []byte("def"), 0644),
+	}
+	files2 := []FileApplier{
+		newTestFile("/foo", []byte("abc"), 0644),
+		newTestFile("/bar", []byte("def"), 0600), // different perm
+	}
 
-	layer1, err := createLayer(ls, "", initWithFiles(newTestFile("file1", content1, 0644)))
+	tar1, err := tarFromFiles(files1...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	layer2, err := createLayer(ls, layer1.ChainID(), initWithFiles(newTestFile("file2", content2, 0644)))
+	tar2, err := tarFromFiles(files2...)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	layer1DiffSize, err := graphDiffSize(ls, layer1)
+	layer1, err := ls.Register(bytes.NewReader(tar1), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if int(layer1DiffSize) != len(content1) {
-		t.Fatalf("Unexpected diff size %d, expected %d", layer1DiffSize, len(content1))
+	layer2, err := ls.Register(bytes.NewReader(tar2), "")
+	if err != nil {
+		t.Fatal(err)
 	}
+	id1 := digest.Digest(layer1.ChainID())
+	id2 := digest.Digest(layer2.ChainID())
 
-	layer1Size, err := layer1.Size()
+	// Replace tar data files
+	src, err := os.Open(filepath.Join(tmpdir, id1.Algorithm().String(), id1.Hex(), "tar-split.json.gz"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if expected := len(content1); int(layer1Size) != expected {
-		t.Fatalf("Unexpected size %d, expected %d", layer1Size, expected)
-	}
-
-	layer2DiffSize, err := graphDiffSize(ls, layer2)
+	dst, err := os.Create(filepath.Join(tmpdir, id2.Algorithm().String(), id2.Hex(), "tar-split.json.gz"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if int(layer2DiffSize) != len(content2) {
-		t.Fatalf("Unexpected diff size %d, expected %d", layer2DiffSize, len(content2))
-	}
-
-	layer2Size, err := layer2.Size()
-	if err != nil {
+	if _, err := io.Copy(dst, src); err != nil {
 		t.Fatal(err)
 	}
 
-	if expected := len(content1) + len(content2); int(layer2Size) != expected {
-		t.Fatalf("Unexpected size %d, expected %d", layer2Size, expected)
+	src.Close()
+	dst.Close()
+
+	ts, err := layer2.TarStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(ioutil.Discard, ts)
+	if err == nil {
+		t.Fatal("expected data verification to fail")
+	}
+	if !strings.Contains(err.Error(), "could not verify layer data") {
+		t.Fatalf("wrong error returned from tarstream: %q", err)
 	}
 }

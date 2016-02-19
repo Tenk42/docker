@@ -3,9 +3,11 @@
 package daemon
 
 import (
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/versions/v1p19"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/container"
+	"github.com/docker/docker/daemon/exec"
+	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/versions/v1p19"
 )
 
 // This sets platform-specific fields
@@ -20,7 +22,7 @@ func setPlatformSpecificContainerFields(container *container.Container, contJSON
 
 // containerInspectPre120 gets containers for pre 1.20 APIs.
 func (daemon *Daemon) containerInspectPre120(name string) (*v1p19.ContainerJSON, error) {
-	container, err := daemon.Get(name)
+	container, err := daemon.GetContainer(name)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +74,18 @@ func addMountPoints(container *container.Container) []types.MountPoint {
 			Driver:      m.Driver,
 			Mode:        m.Mode,
 			RW:          m.RW,
+			Propagation: m.Propagation,
 		})
 	}
 	return mountPoints
+}
+
+func inspectExecProcessConfig(e *exec.Config) *backend.ExecProcessConfig {
+	return &backend.ExecProcessConfig{
+		Tty:        e.ProcessConfig.Tty,
+		Entrypoint: e.ProcessConfig.Entrypoint,
+		Arguments:  e.ProcessConfig.Arguments,
+		Privileged: &e.ProcessConfig.Privileged,
+		User:       e.ProcessConfig.User,
+	}
 }

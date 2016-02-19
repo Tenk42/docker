@@ -4,16 +4,13 @@ import (
 	"container/heap"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path"
-	"path/filepath"
+	"net"
+	"strings"
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/libnetwork/etchosts"
 	"github.com/docker/libnetwork/osl"
-	"github.com/docker/libnetwork/resolvconf"
 	"github.com/docker/libnetwork/types"
 )
 
@@ -38,9 +35,17 @@ type Sandbox interface {
 	Rename(name string) error
 	// Delete destroys this container after detaching it from all connected endpoints.
 	Delete() error
+	// ResolveName searches for the service name in the networks to which the sandbox
+	// is connected to.
+	ResolveName(name string) net.IP
+	// ResolveIP returns the service name for the passed in IP. IP is in reverse dotted
+	// notation; the format used for DNS PTR records
+	ResolveIP(name string) string
+	// Endpoints returns all the endpoints connected to the sandbox
+	Endpoints() []Endpoint
 }
 
-// SandboxOption is a option setter function type used to pass varios options to
+// SandboxOption is an option setter function type used to pass various options to
 // NewNetContainer method. The various setter functions of type SandboxOption are
 // provided by libnetwork, they look like ContainerOptionXXXX(...)
 type SandboxOption func(sb *sandbox)
@@ -59,10 +64,12 @@ type sandbox struct {
 	id            string
 	containerID   string
 	config        containerConfig
+	extDNS        []string
 	osSbox        osl.Sandbox
 	controller    *controller
+	resolver      Resolver
+	resolverOnce  sync.Once
 	refCnt        int
-	hostsOnce     sync.Once
 	endpoints     epHeap
 	epPriority    map[string]int
 	joinLeaveDone chan struct{}
@@ -150,6 +157,10 @@ func (sb *sandbox) Statistics() (map[string]*types.InterfaceStatistics, error) {
 }
 
 func (sb *sandbox) Delete() error {
+	return sb.delete(false)
+}
+
+func (sb *sandbox) delete(force bool) error {
 	sb.Lock()
 	if sb.inDelete {
 		sb.Unlock()
@@ -171,12 +182,6 @@ func (sb *sandbox) Delete() error {
 	// Detach from all endpoints
 	retain := false
 	for _, ep := range sb.getConnectedEndpoints() {
-		// endpoint in the Gateway network will be cleaned up
-		// when when sandbox no longer needs external connectivity
-		if ep.endpointInGWNetwork() {
-			continue
-		}
-
 		// Retain the sanbdox if we can't obtain the network from store.
 		if _, err := c.getNetworkFromStore(ep.getNetwork().ID()); err != nil {
 			retain = true
@@ -184,11 +189,13 @@ func (sb *sandbox) Delete() error {
 			continue
 		}
 
-		if err := ep.Leave(sb); err != nil {
-			log.Warnf("Failed detaching sandbox %s from endpoint %s: %v\n", sb.ID(), ep.ID(), err)
+		if !force {
+			if err := ep.Leave(sb); err != nil {
+				log.Warnf("Failed detaching sandbox %s from endpoint %s: %v\n", sb.ID(), ep.ID(), err)
+			}
 		}
 
-		if err := ep.Delete(); err != nil {
+		if err := ep.Delete(force); err != nil {
 			log.Warnf("Failed deleting endpoint %s: %v\n", ep.ID(), err)
 		}
 	}
@@ -202,6 +209,10 @@ func (sb *sandbox) Delete() error {
 	// Container is going away. Path cache in etchosts is most
 	// likely not required any more. Drop it.
 	etchosts.Drop(sb.config.hostsPath)
+
+	if sb.resolver != nil {
+		sb.resolver.Stop()
+	}
 
 	if sb.osSbox != nil && !sb.config.useDefaultSandBox {
 		sb.osSbox.Destroy()
@@ -292,20 +303,15 @@ func (sb *sandbox) UnmarshalJSON(b []byte) (err error) {
 	return nil
 }
 
-func (sb *sandbox) setupResolutionFiles() error {
-	if err := sb.buildHostsFile(); err != nil {
-		return err
-	}
+func (sb *sandbox) Endpoints() []Endpoint {
+	sb.Lock()
+	defer sb.Unlock()
 
-	if err := sb.updateParentHosts(); err != nil {
-		return err
+	endpoints := make([]Endpoint, len(sb.endpoints))
+	for i, ep := range sb.endpoints {
+		endpoints[i] = ep
 	}
-
-	if err := sb.setupDNS(); err != nil {
-		return err
-	}
-
-	return nil
+	return endpoints
 }
 
 func (sb *sandbox) getConnectedEndpoints() []*endpoint {
@@ -362,24 +368,142 @@ func (sb *sandbox) updateGateway(ep *endpoint) error {
 	return nil
 }
 
+func (sb *sandbox) ResolveIP(ip string) string {
+	var svc string
+	log.Debugf("IP To resolve %v", ip)
+
+	for _, ep := range sb.getConnectedEndpoints() {
+		n := ep.getNetwork()
+
+		sr, ok := n.getController().svcDb[n.ID()]
+		if !ok {
+			continue
+		}
+
+		nwName := n.Name()
+		n.Lock()
+		svc, ok = sr.ipMap[ip]
+		n.Unlock()
+		if ok {
+			return svc + "." + nwName
+		}
+	}
+	return svc
+}
+
+func (sb *sandbox) ResolveName(name string) net.IP {
+	var ip net.IP
+
+	// Embedded server owns the docker network domain. Resolution should work
+	// for both container_name and container_name.network_name
+	// We allow '.' in service name and network name. For a name a.b.c.d the
+	// following have to tried;
+	// {a.b.c.d in the networks container is connected to}
+	// {a.b.c in network d},
+	// {a.b in network c.d},
+	// {a in network b.c.d},
+
+	name = strings.TrimSuffix(name, ".")
+	reqName := []string{name}
+	networkName := []string{""}
+
+	if strings.Contains(name, ".") {
+		var i int
+		dup := name
+		for {
+			if i = strings.LastIndex(dup, "."); i == -1 {
+				break
+			}
+			networkName = append(networkName, name[i+1:])
+			reqName = append(reqName, name[:i])
+
+			dup = dup[:i]
+		}
+	}
+
+	epList := sb.getConnectedEndpoints()
+	for i := 0; i < len(reqName); i++ {
+		log.Debugf("To resolve: %v in %v", reqName[i], networkName[i])
+
+		// First check for local container alias
+		ip = sb.resolveName(reqName[i], networkName[i], epList, true)
+		if ip != nil {
+			return ip
+		}
+
+		// Resolve the actual container name
+		ip = sb.resolveName(reqName[i], networkName[i], epList, false)
+		if ip != nil {
+			return ip
+		}
+	}
+	return nil
+}
+
+func (sb *sandbox) resolveName(req string, networkName string, epList []*endpoint, alias bool) net.IP {
+	for _, ep := range epList {
+		name := req
+		n := ep.getNetwork()
+
+		if networkName != "" && networkName != n.Name() {
+			continue
+		}
+
+		if alias {
+			if ep.aliases == nil {
+				continue
+			}
+
+			var ok bool
+			ep.Lock()
+			name, ok = ep.aliases[req]
+			ep.Unlock()
+			if !ok {
+				continue
+			}
+		} else {
+			// If it is a regular lookup and if the requested name is an alias
+			// dont perform a svc lookup for this endpoint.
+			ep.Lock()
+			if _, ok := ep.aliases[req]; ok {
+				ep.Unlock()
+				continue
+			}
+			ep.Unlock()
+		}
+
+		sr, ok := n.getController().svcDb[n.ID()]
+		if !ok {
+			continue
+		}
+
+		n.Lock()
+		ip, ok := sr.svcMap[name]
+		n.Unlock()
+		if ok {
+			return ip[0]
+		}
+	}
+	return nil
+}
+
 func (sb *sandbox) SetKey(basePath string) error {
-	var err error
 	if basePath == "" {
 		return types.BadRequestErrorf("invalid sandbox key")
 	}
 
 	sb.Lock()
-	osSbox := sb.osSbox
+	oldosSbox := sb.osSbox
 	sb.Unlock()
 
-	if osSbox != nil {
+	if oldosSbox != nil {
 		// If we already have an OS sandbox, release the network resources from that
 		// and destroy the OS snab. We are moving into a new home further down. Note that none
 		// of the network resources gets destroyed during the move.
 		sb.releaseOSSbox()
 	}
 
-	osSbox, err = osl.GetSandboxForExternalKey(basePath, sb.Key())
+	osSbox, err := osl.GetSandboxForExternalKey(basePath, sb.Key())
 	if err != nil {
 		return err
 	}
@@ -395,6 +519,17 @@ func (sb *sandbox) SetKey(basePath string) error {
 		}
 	}()
 
+	// If the resolver was setup before stop it and set it up in the
+	// new osl sandbox.
+	if oldosSbox != nil && sb.resolver != nil {
+		sb.resolver.Stop()
+
+		sb.osSbox.InvokeFunc(sb.resolver.SetupFunc())
+		if err := sb.resolver.Start(); err != nil {
+			log.Errorf("Resolver Setup/Start failed for container %s, %q", sb.ContainerID(), err)
+		}
+	}
+
 	for _, ep := range sb.getConnectedEndpoints() {
 		if err = sb.populateNetworkResources(ep); err != nil {
 			return err
@@ -408,7 +543,7 @@ func releaseOSSboxResources(osSbox osl.Sandbox, ep *endpoint) {
 		// Only remove the interfaces owned by this endpoint from the sandbox.
 		if ep.hasInterface(i.SrcName()) {
 			if err := i.Remove(); err != nil {
-				log.Debugf("Remove interface failed: %v", err)
+				log.Debugf("Remove interface %s failed: %v", i.SrcName(), err)
 			}
 		}
 	}
@@ -459,6 +594,10 @@ func (sb *sandbox) populateNetworkResources(ep *endpoint) error {
 	joinInfo := ep.joinInfo
 	i := ep.iface
 	ep.Unlock()
+
+	if ep.needResolver() {
+		sb.startResolver()
+	}
 
 	if i != nil && i.srcName != "" {
 		var ifaceOptions []osl.IfaceOption
@@ -566,246 +705,6 @@ func (sb *sandbox) clearNetworkResources(origEp *endpoint) error {
 	}
 
 	return nil
-}
-
-const (
-	defaultPrefix = "/var/lib/docker/network/files"
-	dirPerm       = 0755
-	filePerm      = 0644
-)
-
-func (sb *sandbox) buildHostsFile() error {
-	if sb.config.hostsPath == "" {
-		sb.config.hostsPath = defaultPrefix + "/" + sb.id + "/hosts"
-	}
-
-	dir, _ := filepath.Split(sb.config.hostsPath)
-	if err := createBasePath(dir); err != nil {
-		return err
-	}
-
-	// This is for the host mode networking
-	if sb.config.originHostsPath != "" {
-		if err := copyFile(sb.config.originHostsPath, sb.config.hostsPath); err != nil && !os.IsNotExist(err) {
-			return types.InternalErrorf("could not copy source hosts file %s to %s: %v", sb.config.originHostsPath, sb.config.hostsPath, err)
-		}
-		return nil
-	}
-
-	extraContent := make([]etchosts.Record, 0, len(sb.config.extraHosts))
-	for _, extraHost := range sb.config.extraHosts {
-		extraContent = append(extraContent, etchosts.Record{Hosts: extraHost.name, IP: extraHost.IP})
-	}
-
-	return etchosts.Build(sb.config.hostsPath, "", sb.config.hostName, sb.config.domainName, extraContent)
-}
-
-func (sb *sandbox) updateHostsFile(ifaceIP string, svcRecords []etchosts.Record) error {
-	var err error
-
-	if sb.config.originHostsPath != "" {
-		return nil
-	}
-
-	max := func(a, b int) int {
-		if a < b {
-			return b
-		}
-
-		return a
-	}
-
-	extraContent := make([]etchosts.Record, 0,
-		max(len(sb.config.extraHosts), len(svcRecords)))
-
-	sb.hostsOnce.Do(func() {
-		// Rebuild the hosts file accounting for the passed
-		// interface IP and service records
-
-		for _, extraHost := range sb.config.extraHosts {
-			extraContent = append(extraContent,
-				etchosts.Record{Hosts: extraHost.name, IP: extraHost.IP})
-		}
-
-		err = etchosts.Build(sb.config.hostsPath, ifaceIP,
-			sb.config.hostName, sb.config.domainName, extraContent)
-	})
-
-	if err != nil {
-		return err
-	}
-
-	extraContent = extraContent[:0]
-	for _, svc := range svcRecords {
-		extraContent = append(extraContent, svc)
-	}
-
-	sb.addHostsEntries(extraContent)
-	return nil
-}
-
-func (sb *sandbox) addHostsEntries(recs []etchosts.Record) {
-	if err := etchosts.Add(sb.config.hostsPath, recs); err != nil {
-		log.Warnf("Failed adding service host entries to the running container: %v", err)
-	}
-}
-
-func (sb *sandbox) deleteHostsEntries(recs []etchosts.Record) {
-	if err := etchosts.Delete(sb.config.hostsPath, recs); err != nil {
-		log.Warnf("Failed deleting service host entries to the running container: %v", err)
-	}
-}
-
-func (sb *sandbox) updateParentHosts() error {
-	var pSb Sandbox
-
-	for _, update := range sb.config.parentUpdates {
-		sb.controller.WalkSandboxes(SandboxContainerWalker(&pSb, update.cid))
-		if pSb == nil {
-			continue
-		}
-		if err := etchosts.Update(pSb.(*sandbox).config.hostsPath, update.ip, update.name); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (sb *sandbox) setupDNS() error {
-	var newRC *resolvconf.File
-
-	if sb.config.resolvConfPath == "" {
-		sb.config.resolvConfPath = defaultPrefix + "/" + sb.id + "/resolv.conf"
-	}
-
-	sb.config.resolvConfHashFile = sb.config.resolvConfPath + ".hash"
-
-	dir, _ := filepath.Split(sb.config.resolvConfPath)
-	if err := createBasePath(dir); err != nil {
-		return err
-	}
-
-	// This is for the host mode networking
-	if sb.config.originResolvConfPath != "" {
-		if err := copyFile(sb.config.originResolvConfPath, sb.config.resolvConfPath); err != nil {
-			return fmt.Errorf("could not copy source resolv.conf file %s to %s: %v", sb.config.originResolvConfPath, sb.config.resolvConfPath, err)
-		}
-		return nil
-	}
-
-	currRC, err := resolvconf.Get()
-	if err != nil {
-		return err
-	}
-
-	if len(sb.config.dnsList) > 0 || len(sb.config.dnsSearchList) > 0 || len(sb.config.dnsOptionsList) > 0 {
-		var (
-			err            error
-			dnsList        = resolvconf.GetNameservers(currRC.Content)
-			dnsSearchList  = resolvconf.GetSearchDomains(currRC.Content)
-			dnsOptionsList = resolvconf.GetOptions(currRC.Content)
-		)
-		if len(sb.config.dnsList) > 0 {
-			dnsList = sb.config.dnsList
-		}
-		if len(sb.config.dnsSearchList) > 0 {
-			dnsSearchList = sb.config.dnsSearchList
-		}
-		if len(sb.config.dnsOptionsList) > 0 {
-			dnsOptionsList = sb.config.dnsOptionsList
-		}
-		newRC, err = resolvconf.Build(sb.config.resolvConfPath, dnsList, dnsSearchList, dnsOptionsList)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Replace any localhost/127.* (at this point we have no info about ipv6, pass it as true)
-		if newRC, err = resolvconf.FilterResolvDNS(currRC.Content, true); err != nil {
-			return err
-		}
-		// No contention on container resolv.conf file at sandbox creation
-		if err := ioutil.WriteFile(sb.config.resolvConfPath, newRC.Content, filePerm); err != nil {
-			return types.InternalErrorf("failed to write unhaltered resolv.conf file content when setting up dns for sandbox %s: %v", sb.ID(), err)
-		}
-	}
-
-	// Write hash
-	if err := ioutil.WriteFile(sb.config.resolvConfHashFile, []byte(newRC.Hash), filePerm); err != nil {
-		return types.InternalErrorf("failed to write resolv.conf hash file when setting up dns for sandbox %s: %v", sb.ID(), err)
-	}
-
-	return nil
-}
-
-func (sb *sandbox) updateDNS(ipv6Enabled bool) error {
-	var (
-		currHash string
-		hashFile = sb.config.resolvConfHashFile
-	)
-
-	if len(sb.config.dnsList) > 0 || len(sb.config.dnsSearchList) > 0 || len(sb.config.dnsOptionsList) > 0 {
-		return nil
-	}
-
-	currRC, err := resolvconf.GetSpecific(sb.config.resolvConfPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-	} else {
-		h, err := ioutil.ReadFile(hashFile)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
-		} else {
-			currHash = string(h)
-		}
-	}
-
-	if currHash != "" && currHash != currRC.Hash {
-		// Seems the user has changed the container resolv.conf since the last time
-		// we checked so return without doing anything.
-		log.Infof("Skipping update of resolv.conf file with ipv6Enabled: %t because file was touched by user", ipv6Enabled)
-		return nil
-	}
-
-	// replace any localhost/127.* and remove IPv6 nameservers if IPv6 disabled.
-	newRC, err := resolvconf.FilterResolvDNS(currRC.Content, ipv6Enabled)
-	if err != nil {
-		return err
-	}
-
-	// for atomic updates to these files, use temporary files with os.Rename:
-	dir := path.Dir(sb.config.resolvConfPath)
-	tmpHashFile, err := ioutil.TempFile(dir, "hash")
-	if err != nil {
-		return err
-	}
-	tmpResolvFile, err := ioutil.TempFile(dir, "resolv")
-	if err != nil {
-		return err
-	}
-
-	// Change the perms to filePerm (0644) since ioutil.TempFile creates it by default as 0600
-	if err := os.Chmod(tmpResolvFile.Name(), filePerm); err != nil {
-		return err
-	}
-
-	// write the updates to the temp files
-	if err = ioutil.WriteFile(tmpHashFile.Name(), []byte(newRC.Hash), filePerm); err != nil {
-		return err
-	}
-	if err = ioutil.WriteFile(tmpResolvFile.Name(), newRC.Content, filePerm); err != nil {
-		return err
-	}
-
-	// rename the temp files for atomic replace
-	if err = os.Rename(tmpHashFile.Name(), hashFile); err != nil {
-		return err
-	}
-	return os.Rename(tmpResolvFile.Name(), sb.config.resolvConfPath)
 }
 
 // joinLeaveStart waits to ensure there are no joins or leaves in progress and
@@ -1008,33 +907,4 @@ func (eh *epHeap) Pop() interface{} {
 	x := old[n-1]
 	*eh = old[0 : n-1]
 	return x
-}
-
-func createBasePath(dir string) error {
-	return os.MkdirAll(dir, dirPerm)
-}
-
-func createFile(path string) error {
-	var f *os.File
-
-	dir, _ := filepath.Split(path)
-	err := createBasePath(dir)
-	if err != nil {
-		return err
-	}
-
-	f, err = os.Create(path)
-	if err == nil {
-		f.Close()
-	}
-
-	return err
-}
-
-func copyFile(src, dst string) error {
-	sBytes, err := ioutil.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return ioutil.WriteFile(dst, sBytes, filePerm)
 }

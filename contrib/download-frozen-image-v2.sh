@@ -56,6 +56,13 @@ while [ $# -gt 0 ]; do
 	layersFs=$(echo "$manifestJson" | jq --raw-output '.fsLayers | .[] | .blobSum')
 
 	IFS=$'\n'
+	# bash v4 on Windows CI requires CRLF separator
+	if [ "$(go env GOHOSTOS)" = 'windows' ]; then
+		major=$(echo ${BASH_VERSION%%[^0.9]} | cut -d. -f1)
+		if [ "$major" -ge 4 ]; then
+			IFS=$'\r\n'
+		fi
+	fi
 	layers=( ${layersFs} )
 	unset IFS
 
@@ -88,6 +95,7 @@ while [ $# -gt 0 ]; do
 			echo "skipping existing ${imageId:0:12}"
 			continue
 		fi
+		token="$(curl -sSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$image:pull" | jq --raw-output .token)"
 		curl -SL --progress -H "Authorization: Bearer $token" "https://registry-1.docker.io/v2/$image/blobs/$imageLayer" -o "$dir/$imageId/layer.tar" # -C -
 	done
 	echo

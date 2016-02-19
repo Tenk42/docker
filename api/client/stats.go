@@ -10,10 +10,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"golang.org/x/net/context"
+
 	Cli "github.com/docker/docker/cli"
-	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/pkg/units"
+	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/events"
+	"github.com/docker/engine-api/types/filters"
+	"github.com/docker/go-units"
 )
 
 type containerStats struct {
@@ -36,7 +39,7 @@ type stats struct {
 }
 
 func (s *containerStats) Collect(cli *DockerCli, streamStats bool) {
-	responseBody, err := cli.client.ContainerStats(s.Name, streamStats)
+	responseBody, err := cli.client.ContainerStats(context.Background(), s.Name, streamStats)
 	if err != nil {
 		s.mu.Lock()
 		s.err = err
@@ -62,7 +65,7 @@ func (s *containerStats) Collect(cli *DockerCli, streamStats bool) {
 			var memPercent = 0.0
 			var cpuPercent = 0.0
 
-			// MemoryStats.Limit will never be 0 unless the container is not running and we havn't
+			// MemoryStats.Limit will never be 0 unless the container is not running and we haven't
 			// got any data from cgroup
 			if v.MemoryStats.Limit != 0 {
 				memPercent = float64(v.MemoryStats.Usage) / float64(v.MemoryStats.Limit) * 100.0
@@ -189,23 +192,27 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			err   error
 		}
 		getNewContainers := func(c chan<- watch) {
-			options := types.EventsOptions{}
-			resBody, err := cli.client.Events(options)
+			f := filters.NewArgs()
+			f.Add("type", "container")
+			options := types.EventsOptions{
+				Filters: f,
+			}
+			resBody, err := cli.client.Events(context.Background(), options)
 			if err != nil {
 				c <- watch{err: err}
 				return
 			}
 			defer resBody.Close()
 
-			dec := json.NewDecoder(resBody)
-			for {
-				var j *jsonmessage.JSONMessage
-				if err := dec.Decode(&j); err != nil {
+			decodeEvents(resBody, func(event events.Message, err error) error {
+				if err != nil {
 					c <- watch{err: err}
-					return
+					return nil
 				}
-				c <- watch{j.ID[:12], j.Status, nil}
-			}
+
+				c <- watch{event.ID[:12], event.Action, nil}
+				return nil
+			})
 		}
 		go func(stopChan chan<- error) {
 			cChan := make(chan watch)
@@ -287,7 +294,7 @@ func (cli *DockerCli) CmdStats(args ...string) error {
 			if ok {
 				if err != nil {
 					// this is suppressing "unexpected EOF" in the cli when the
-					// daemon restarts so it shudowns cleanly
+					// daemon restarts so it shutdowns cleanly
 					if err == io.ErrUnexpectedEOF {
 						return nil
 					}

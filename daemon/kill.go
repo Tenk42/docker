@@ -17,7 +17,7 @@ import (
 // for the container to exit.
 // If a signal is given, then just send it to the container and return.
 func (daemon *Daemon) ContainerKill(name string, sig uint64) error {
-	container, err := daemon.Get(name)
+	container, err := daemon.GetContainer(name)
 	if err != nil {
 		return err
 	}
@@ -62,10 +62,13 @@ func (daemon *Daemon) killWithSignal(container *container.Container, sig int) er
 	}
 
 	if err := daemon.kill(container, sig); err != nil {
-		return err
+		return derr.ErrorCodeCantKill.WithArgs(container.ID, err)
 	}
 
-	daemon.LogContainerEvent(container, "kill")
+	attributes := map[string]string{
+		"signal": fmt.Sprintf("%d", sig),
+	}
+	daemon.LogContainerEventWithAttributes(container, "kill", attributes)
 	return nil
 }
 
@@ -105,7 +108,7 @@ func (daemon *Daemon) Kill(container *container.Container) error {
 	return nil
 }
 
-// killPossibleDeadProcess is a wrapper aroung killSig() suppressing "no such process" error.
+// killPossibleDeadProcess is a wrapper around killSig() suppressing "no such process" error.
 func (daemon *Daemon) killPossiblyDeadProcess(container *container.Container, sig int) error {
 	err := daemon.killWithSignal(container, sig)
 	if err == syscall.ESRCH {

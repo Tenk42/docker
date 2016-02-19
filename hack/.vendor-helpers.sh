@@ -76,7 +76,6 @@ _dockerfile_env() {
 clean() {
 	local packages=(
 		"${PROJECT}/docker" # package main
-		"${PROJECT}/dockerinit" # package main
 		"${PROJECT}/integration-cli" # external tests
 	)
 	local dockerPlatforms=( ${DOCKER_ENGINE_OSARCH:="linux/amd64"} $(_dockerfile_env DOCKER_CROSSPLATFORMS) )
@@ -85,7 +84,6 @@ clean() {
 		''
 		'experimental'
 		'pkcs11'
-		'seccomp'
 		"$dockerBuildTags"
 		"daemon $dockerBuildTags"
 		"daemon cgo $dockerBuildTags"
@@ -95,9 +93,6 @@ clean() {
 		"pkcs11 $dockerBuildTags"
 		"pkcs11 daemon $dockerBuildTags"
 		"pkcs11 daemon cgo $dockerBuildTags"
-		"seccomp $dockerBuildTags"
-		"seccomp daemon $dockerBuildTags"
-		"seccomp daemon cgo $dockerBuildTags"
 	)
 
 	echo
@@ -109,11 +104,8 @@ clean() {
 			export GOOS="${platform%/*}";
 			export GOARCH="${platform##*/}";
 			for buildTags in "${buildTagCombos[@]}"; do
-				pkgs=( $(go list -e -tags "$buildTags" -f '{{join .Deps "\n"}}' "${packages[@]}" | grep -E "^${PROJECT}" | grep -vE "^${PROJECT}/vendor" | sort -u) )
-				pkgs+=( ${packages[@]} )
-				testImports=( $(go list -e -tags "$buildTags" -f '{{join .TestImports "\n"}}' "${pkgs[@]}" | sort -u) )
-				printf '%s\n' "${testImports[@]}"
-				go list -e -tags "$buildTags" -f '{{join .Deps "\n"}}' "${packages[@]} ${testImports[@]}"
+				go list -e -tags "$buildTags" -f '{{join .Deps "\n"}}' "${packages[@]}"
+				go list -e -tags "$buildTags" -f '{{join .TestImports "\n"}}' "${packages[@]}"
 			done
 		done | grep -vE "^${PROJECT}" | sort -u
 	) )
@@ -124,13 +116,20 @@ clean() {
 	findArgs=(
 		# This directory contains only .c and .h files which are necessary
 		-path vendor/src/github.com/mattn/go-sqlite3/code
-		# This directory is needed for compiling the unit tests
-		-o -path vendor/src/github.com/stretchr/objx
 	)
+
+	# This package is required to build the Etcd client,
+	# but Etcd hard codes a local Godep full path.
+	# FIXME: fix_rewritten_imports fixes this problem in most platforms
+	# but it fails in very small corner cases where it makes the vendor
+	# script to remove this package.
+	# See: https://github.com/docker/docker/issues/19231
+	findArgs+=( -or -path vendor/src/github.com/ugorji/go/codec )
 	for import in "${imports[@]}"; do
 		[ "${#findArgs[@]}" -eq 0 ] || findArgs+=( -or )
 		findArgs+=( -path "vendor/src/$import" )
 	done
+
 	local IFS=$'\n'
 	local prune=( $($find vendor -depth -type d -not '(' "${findArgs[@]}" ')') )
 	unset IFS

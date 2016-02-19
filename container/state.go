@@ -7,7 +7,7 @@ import (
 
 	"github.com/docker/docker/daemon/execdriver"
 	derr "github.com/docker/docker/errors"
-	"github.com/docker/docker/pkg/units"
+	"github.com/docker/go-units"
 )
 
 // State holds the current container state, and has methods to get and
@@ -243,6 +243,14 @@ func (s *State) SetError(err error) {
 func (s *State) IsPaused() bool {
 	s.Lock()
 	res := s.Paused
+	s.Unlock()
+	return res
+}
+
+// IsRestarting returns whether the container is restarting or not.
+func (s *State) IsRestarting() bool {
+	s.Lock()
+	res := s.Restarting
 	s.Unlock()
 	return res
 }

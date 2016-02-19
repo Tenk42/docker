@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/docker/distribution/reference"
-	"github.com/docker/docker/api/types"
 	Cli "github.com/docker/docker/cli"
 	"github.com/docker/docker/opts"
 	flag "github.com/docker/docker/pkg/mflag"
-	"github.com/docker/docker/registry"
-	"github.com/docker/docker/runconfig"
+	"github.com/docker/docker/reference"
+	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/container"
 )
 
 // CmdCommit creates a new image from a container's changes.
@@ -44,23 +43,20 @@ func (cli *DockerCli) CmdCommit(args ...string) error {
 		if err != nil {
 			return err
 		}
-		if err := registry.ValidateRepositoryName(ref); err != nil {
-			return err
-		}
 
 		repositoryName = ref.Name()
 
 		switch x := ref.(type) {
-		case reference.Digested:
+		case reference.Canonical:
 			return errors.New("cannot commit to digest reference")
-		case reference.Tagged:
+		case reference.NamedTagged:
 			tag = x.Tag()
 		}
 	}
 
-	var config *runconfig.Config
+	var config *container.Config
 	if *flConfig != "" {
-		config = &runconfig.Config{}
+		config = &container.Config{}
 		if err := json.Unmarshal([]byte(*flConfig), config); err != nil {
 			return err
 		}
