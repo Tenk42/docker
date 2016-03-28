@@ -10,7 +10,6 @@ import (
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/pkg/authorization"
-	"github.com/docker/docker/utils"
 	"github.com/gorilla/mux"
 	"golang.org/x/net/context"
 )
@@ -113,18 +112,8 @@ func (s *HTTPServer) Close() error {
 	return s.l.Close()
 }
 
-func writeCorsHeaders(w http.ResponseWriter, r *http.Request, corsHeaders string) {
-	logrus.Debugf("CORS header is enabled and set to: %s", corsHeaders)
-	w.Header().Add("Access-Control-Allow-Origin", corsHeaders)
-	w.Header().Add("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, X-Registry-Auth")
-	w.Header().Add("Access-Control-Allow-Methods", "HEAD, GET, POST, DELETE, PUT, OPTIONS")
-}
-
 func (s *Server) makeHTTPHandler(handler httputils.APIFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// log the handler call
-		logrus.Debugf("Calling %s %s", r.Method, r.URL.Path)
-
 		// Define the context that we'll pass around to share info
 		// like the docker-request-id.
 		//
@@ -141,7 +130,7 @@ func (s *Server) makeHTTPHandler(handler httputils.APIFunc) http.HandlerFunc {
 		}
 
 		if err := handlerFunc(ctx, w, r, vars); err != nil {
-			logrus.Errorf("Handler for %s %s returned error: %s", r.Method, r.URL.Path, utils.GetErrorMessage(err))
+			logrus.Errorf("Handler for %s %s returned error: %v", r.Method, r.URL.Path, err)
 			httputils.WriteError(w, err)
 		}
 	}

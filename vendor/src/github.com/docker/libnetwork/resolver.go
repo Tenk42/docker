@@ -2,11 +2,15 @@ package libnetwork
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
+	"sync"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/libnetwork/iptables"
+	"github.com/docker/libnetwork/netutils"
 	"github.com/miekg/dns"
 )
 
@@ -31,23 +35,35 @@ type Resolver interface {
 }
 
 const (
-	resolverIP    = "127.0.0.11"
-	dnsPort       = "53"
-	ptrIPv4domain = ".in-addr.arpa."
-	ptrIPv6domain = ".ip6.arpa."
-	respTTL       = 600
-	maxExtDNS     = 3 //max number of external servers to try
+	resolverIP      = "127.0.0.11"
+	dnsPort         = "53"
+	ptrIPv4domain   = ".in-addr.arpa."
+	ptrIPv6domain   = ".ip6.arpa."
+	respTTL         = 600
+	maxExtDNS       = 3 //max number of external servers to try
+	extIOTimeout    = 3 * time.Second
+	defaultRespSize = 512
 )
+
+type extDNSEntry struct {
+	ipStr   string
+	extConn net.Conn
+	extOnce sync.Once
+}
 
 // resolver implements the Resolver interface
 type resolver struct {
-	sb        *sandbox
-	extDNS    []string
-	server    *dns.Server
-	conn      *net.UDPConn
-	tcpServer *dns.Server
-	tcpListen *net.TCPListener
-	err       error
+	sb         *sandbox
+	extDNSList [maxExtDNS]extDNSEntry
+	server     *dns.Server
+	conn       *net.UDPConn
+	tcpServer  *dns.Server
+	tcpListen  *net.TCPListener
+	err        error
+}
+
+func init() {
+	rand.Seed(time.Now().Unix())
 }
 
 // NewResolver creates a new instance of the Resolver
@@ -124,6 +140,11 @@ func (r *resolver) Start() error {
 }
 
 func (r *resolver) Stop() {
+	for i := 0; i < maxExtDNS; i++ {
+		r.extDNSList[i].extConn = nil
+		r.extDNSList[i].extOnce = sync.Once{}
+	}
+
 	if r.server != nil {
 		r.server.Shutdown()
 	}
@@ -136,7 +157,13 @@ func (r *resolver) Stop() {
 }
 
 func (r *resolver) SetExtServers(dns []string) {
-	r.extDNS = dns
+	l := len(dns)
+	if l > maxExtDNS {
+		l = maxExtDNS
+	}
+	for i := 0; i < l; i++ {
+		r.extDNSList[i].ipStr = dns[i]
+	}
 }
 
 func (r *resolver) NameServer() string {
@@ -151,22 +178,55 @@ func setCommonFlags(msg *dns.Msg) {
 	msg.RecursionAvailable = true
 }
 
-func (r *resolver) handleIPv4Query(name string, query *dns.Msg) (*dns.Msg, error) {
-	addr := r.sb.ResolveName(name)
-	if addr == nil {
-		return nil, nil
+func shuffleAddr(addr []net.IP) []net.IP {
+	for i := len(addr) - 1; i > 0; i-- {
+		r := rand.Intn(i + 1)
+		addr[i], addr[r] = addr[r], addr[i]
 	}
+	return addr
+}
 
-	log.Debugf("Lookup for %s: IP %s", name, addr.String())
-
+func createRespMsg(query *dns.Msg) *dns.Msg {
 	resp := new(dns.Msg)
 	resp.SetReply(query)
 	setCommonFlags(resp)
 
-	rr := new(dns.A)
-	rr.Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: respTTL}
-	rr.A = addr
-	resp.Answer = append(resp.Answer, rr)
+	return resp
+}
+
+func (r *resolver) handleIPQuery(name string, query *dns.Msg, ipType int) (*dns.Msg, error) {
+	addr, ipv6Miss := r.sb.ResolveName(name, ipType)
+	if addr == nil && ipv6Miss {
+		// Send a reply without any Answer sections
+		log.Debugf("Lookup name %s present without IPv6 address", name)
+		resp := createRespMsg(query)
+		return resp, nil
+	}
+	if addr == nil {
+		return nil, nil
+	}
+
+	log.Debugf("Lookup for %s: IP %v", name, addr)
+
+	resp := createRespMsg(query)
+	if len(addr) > 1 {
+		addr = shuffleAddr(addr)
+	}
+	if ipType == netutils.IPv4 {
+		for _, ip := range addr {
+			rr := new(dns.A)
+			rr.Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: respTTL}
+			rr.A = ip
+			resp.Answer = append(resp.Answer, rr)
+		}
+	} else {
+		for _, ip := range addr {
+			rr := new(dns.AAAA)
+			rr.Hdr = dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: respTTL}
+			rr.AAAA = ip
+			resp.Answer = append(resp.Answer, rr)
+		}
+	}
 	return resp, nil
 }
 
@@ -200,10 +260,23 @@ func (r *resolver) handlePTRQuery(ptr string, query *dns.Msg) (*dns.Msg, error) 
 	return resp, nil
 }
 
+func truncateResp(resp *dns.Msg, maxSize int, isTCP bool) {
+	if !isTCP {
+		resp.Truncated = true
+	}
+
+	// trim the Answer RRs one by one till the whole message fits
+	// within the reply size
+	for resp.Len() > maxSize {
+		resp.Answer = resp.Answer[:len(resp.Answer)-1]
+	}
+}
+
 func (r *resolver) ServeDNS(w dns.ResponseWriter, query *dns.Msg) {
 	var (
-		resp *dns.Msg
-		err  error
+		extConn net.Conn
+		resp    *dns.Msg
+		err     error
 	)
 
 	if query == nil || len(query.Question) == 0 {
@@ -211,7 +284,9 @@ func (r *resolver) ServeDNS(w dns.ResponseWriter, query *dns.Msg) {
 	}
 	name := query.Question[0].Name
 	if query.Question[0].Qtype == dns.TypeA {
-		resp, err = r.handleIPv4Query(name, query)
+		resp, err = r.handleIPQuery(name, query, netutils.IPv4)
+	} else if query.Question[0].Qtype == dns.TypeAAAA {
+		resp, err = r.handleIPQuery(name, query, netutils.IPv6)
 	} else if query.Question[0].Qtype == dns.TypePTR {
 		resp, err = r.handlePTRQuery(name, query)
 	}
@@ -221,28 +296,89 @@ func (r *resolver) ServeDNS(w dns.ResponseWriter, query *dns.Msg) {
 		return
 	}
 
-	if resp == nil {
-		if len(r.extDNS) == 0 {
-			return
+	proto := w.LocalAddr().Network()
+	maxSize := 0
+	if proto == "tcp" {
+		maxSize = dns.MaxMsgSize - 1
+	} else if proto == "udp" {
+		optRR := query.IsEdns0()
+		if optRR != nil {
+			maxSize = int(optRR.UDPSize())
 		}
-
-		num := maxExtDNS
-		if len(r.extDNS) < maxExtDNS {
-			num = len(r.extDNS)
+		if maxSize < defaultRespSize {
+			maxSize = defaultRespSize
 		}
-		for i := 0; i < num; i++ {
-			log.Debugf("Querying ext dns %s:%s for %s[%d]", w.LocalAddr().Network(), r.extDNS[i], name, query.Question[0].Qtype)
+	}
 
-			c := &dns.Client{Net: w.LocalAddr().Network()}
-			addr := fmt.Sprintf("%s:%d", r.extDNS[i], 53)
-
-			resp, _, err = c.Exchange(query, addr)
-			if err == nil {
-				resp.Compress = true
+	if resp != nil {
+		if resp.Len() > maxSize {
+			truncateResp(resp, maxSize, proto == "tcp")
+		}
+	} else {
+		for i := 0; i < maxExtDNS; i++ {
+			extDNS := &r.extDNSList[i]
+			if extDNS.ipStr == "" {
 				break
 			}
-			log.Errorf("external resolution failed, %s", err)
+			log.Debugf("Querying ext dns %s:%s for %s[%d]", proto, extDNS.ipStr, name, query.Question[0].Qtype)
+
+			extConnect := func() {
+				addr := fmt.Sprintf("%s:%d", extDNS.ipStr, 53)
+				extConn, err = net.DialTimeout(proto, addr, extIOTimeout)
+			}
+
+			// For udp clients connection is persisted to reuse for further queries.
+			// Accessing extDNS.extConn be a race here between go rouines. Hence the
+			// connection setup is done in a Once block and fetch the extConn again
+			extConn = extDNS.extConn
+			if extConn == nil || proto == "tcp" {
+				if proto == "udp" {
+					extDNS.extOnce.Do(func() {
+						r.sb.execFunc(extConnect)
+						extDNS.extConn = extConn
+					})
+					extConn = extDNS.extConn
+				} else {
+					r.sb.execFunc(extConnect)
+				}
+				if err != nil {
+					log.Debugf("Connect failed, %s", err)
+					continue
+				}
+			}
+			// If two go routines are executing in parralel one will
+			// block on the Once.Do and in case of error connecting
+			// to the external server it will end up with a nil err
+			// but extConn also being nil.
+			if extConn == nil {
+				continue
+			}
+
+			// Timeout has to be set for every IO operation.
+			extConn.SetDeadline(time.Now().Add(extIOTimeout))
+			co := &dns.Conn{Conn: extConn}
+
+			defer func() {
+				if proto == "tcp" {
+					co.Close()
+				}
+			}()
+			err = co.WriteMsg(query)
+			if err != nil {
+				log.Debugf("Send to DNS server failed, %s", err)
+				continue
+			}
+
+			resp, err = co.ReadMsg()
+			if err != nil {
+				log.Debugf("Read from DNS server failed, %s", err)
+				continue
+			}
+
+			resp.Compress = true
+			break
 		}
+
 		if resp == nil {
 			return
 		}

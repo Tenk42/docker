@@ -6,14 +6,15 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
+	"github.com/Sirupsen/logrus"
 	apiserver "github.com/docker/docker/api/server"
 	"github.com/docker/docker/daemon"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/system"
-
-	_ "github.com/docker/docker/daemon/execdriver/native"
 )
 
 const defaultDaemonConfigFile = "/etc/docker/daemon.json"
@@ -58,7 +59,27 @@ func setupConfigReloadTrap(configFile string, flags *mflag.FlagSet, reload func(
 	signal.Notify(c, syscall.SIGHUP)
 	go func() {
 		for range c {
-			daemon.ReloadConfiguration(configFile, flags, reload)
+			if err := daemon.ReloadConfiguration(configFile, flags, reload); err != nil {
+				logrus.Error(err)
+			}
 		}
 	}()
+}
+
+func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
+	opts := []libcontainerd.RemoteOption{
+		libcontainerd.WithDebugLog(cli.Config.Debug),
+	}
+	if cli.Config.ContainerdAddr != "" {
+		opts = append(opts, libcontainerd.WithRemoteAddr(cli.Config.ContainerdAddr))
+	} else {
+		opts = append(opts, libcontainerd.WithStartDaemon(true))
+	}
+	return opts
+}
+
+// getLibcontainerdRoot gets the root directory for libcontainerd/containerd to
+// store their state.
+func (cli *DaemonCli) getLibcontainerdRoot() string {
+	return filepath.Join(cli.Config.ExecRoot, "libcontainerd")
 }

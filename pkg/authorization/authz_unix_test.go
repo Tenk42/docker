@@ -17,6 +17,9 @@ import (
 	"reflect"
 	"testing"
 
+	"bytes"
+	"strings"
+
 	"github.com/docker/docker/pkg/plugins"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/gorilla/mux"
@@ -135,6 +138,41 @@ func TestResponseModifier(t *testing.T) {
 	}
 }
 
+func TestDrainBody(t *testing.T) {
+
+	tests := []struct {
+		length             int // length is the message length send to drainBody
+		expectedBodyLength int // expectedBodyLength is the expected body length after drainBody is called
+	}{
+		{10, 10}, // Small message size
+		{maxBodySize - 1, maxBodySize - 1}, // Max message size
+		{maxBodySize * 2, 0},               // Large message size (skip copying body)
+
+	}
+
+	for _, test := range tests {
+
+		msg := strings.Repeat("a", test.length)
+		body, closer, err := drainBody(ioutil.NopCloser(bytes.NewReader([]byte(msg))))
+		if len(body) != test.expectedBodyLength {
+			t.Fatalf("Body must be copied, actual length: '%d'", len(body))
+		}
+		if closer == nil {
+			t.Fatalf("Closer must not be nil")
+		}
+		if err != nil {
+			t.Fatalf("Error must not be nil: '%v'", err)
+		}
+		modified, err := ioutil.ReadAll(closer)
+		if err != nil {
+			t.Fatalf("Error must not be nil: '%v'", err)
+		}
+		if len(modified) != len(msg) {
+			t.Fatalf("Result should not be truncated. Original length: '%d', new length: '%d'", len(msg), len(modified))
+		}
+	}
+}
+
 func TestResponseModifierOverride(t *testing.T) {
 	r := httptest.NewRecorder()
 	m := NewResponseModifier(r)
@@ -203,7 +241,7 @@ func (t *authZPluginTestServer) start() {
 	r.HandleFunc("/Plugin.Activate", t.activate)
 	r.HandleFunc("/"+AuthZApiRequest, t.auth)
 	r.HandleFunc("/"+AuthZApiResponse, t.auth)
-	t.listener, err = net.Listen("tcp", pluginAddress)
+	t.listener, _ = net.Listen("tcp", pluginAddress)
 	server := http.Server{Handler: r, Addr: pluginAddress}
 	server.Serve(l)
 }

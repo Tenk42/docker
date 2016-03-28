@@ -12,6 +12,7 @@ type mountedLayer struct {
 	mountID    string
 	initID     string
 	parent     *roLayer
+	path       string
 	layerStore *layerStore
 
 	references map[RWLayer]*referencedRWLayer
@@ -96,6 +97,13 @@ func (ml *mountedLayer) deleteReference(ref RWLayer) error {
 	return nil
 }
 
+func (ml *mountedLayer) retakeReference(r RWLayer) {
+	if ref, ok := r.(*referencedRWLayer); ok {
+		ref.activityCount = 0
+		ml.references[ref] = ref
+	}
+}
+
 type referencedRWLayer struct {
 	*mountedLayer
 
@@ -124,10 +132,21 @@ func (rl *referencedRWLayer) Mount(mountLabel string) (string, error) {
 		return "", ErrLayerNotRetained
 	}
 
-	rl.activityCount++
-	return rl.mountedLayer.Mount(mountLabel)
+	if rl.activityCount > 0 {
+		rl.activityCount++
+		return rl.path, nil
+	}
+
+	m, err := rl.mountedLayer.Mount(mountLabel)
+	if err == nil {
+		rl.activityCount++
+		rl.path = m
+	}
+	return m, err
 }
 
+// Unmount decrements the activity count and unmounts the underlying layer
+// Callers should only call `Unmount` once per call to `Mount`, even on error.
 func (rl *referencedRWLayer) Unmount() error {
 	rl.activityL.Lock()
 	defer rl.activityL.Unlock()
@@ -138,7 +157,11 @@ func (rl *referencedRWLayer) Unmount() error {
 	if rl.activityCount == -1 {
 		return ErrLayerNotRetained
 	}
+
 	rl.activityCount--
+	if rl.activityCount > 0 {
+		return nil
+	}
 
 	return rl.mountedLayer.Unmount()
 }

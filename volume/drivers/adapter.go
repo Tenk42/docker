@@ -1,6 +1,10 @@
 package volumedrivers
 
-import "github.com/docker/docker/volume"
+import (
+	"fmt"
+
+	"github.com/docker/docker/volume"
+)
 
 type volumeDriverAdapter struct {
 	name  string
@@ -18,7 +22,8 @@ func (a *volumeDriverAdapter) Create(name string, opts map[string]string) (volum
 	return &volumeAdapter{
 		proxy:      a.proxy,
 		name:       name,
-		driverName: a.name}, nil
+		driverName: a.name,
+	}, nil
 }
 
 func (a *volumeDriverAdapter) Remove(v volume.Volume) error {
@@ -47,6 +52,11 @@ func (a *volumeDriverAdapter) Get(name string) (volume.Volume, error) {
 	v, err := a.proxy.Get(name)
 	if err != nil {
 		return nil, err
+	}
+
+	// plugin may have returned no volume and no error
+	if v == nil {
+		return nil, fmt.Errorf("no such volume")
 	}
 
 	return &volumeAdapter{

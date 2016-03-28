@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/docker/docker/pkg/homedir"
@@ -709,7 +710,7 @@ func (s *DockerSuite) TestRunTmpfsMounts(c *check.C) {
 	}
 }
 
-// TestRunSeccompProfileDenyUnshare checks that 'docker run --security-opt seccomp:/tmp/profile.json debian:jessie unshare' exits with operation not permitted.
+// TestRunSeccompProfileDenyUnshare checks that 'docker run --security-opt seccomp=/tmp/profile.json debian:jessie unshare' exits with operation not permitted.
 func (s *DockerSuite) TestRunSeccompProfileDenyUnshare(c *check.C) {
 	testRequires(c, SameHostDaemon, seccompEnabled, NotArm, Apparmor)
 	jsonData := `{
@@ -730,14 +731,14 @@ func (s *DockerSuite) TestRunSeccompProfileDenyUnshare(c *check.C) {
 	if _, err := tmpFile.Write([]byte(jsonData)); err != nil {
 		c.Fatal(err)
 	}
-	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "apparmor:unconfined", "--security-opt", "seccomp:"+tmpFile.Name(), "debian:jessie", "unshare", "-p", "-m", "-f", "-r", "mount", "-t", "proc", "none", "/proc")
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "apparmor=unconfined", "--security-opt", "seccomp="+tmpFile.Name(), "debian:jessie", "unshare", "-p", "-m", "-f", "-r", "mount", "-t", "proc", "none", "/proc")
 	out, _, _ := runCommandWithOutput(runCmd)
 	if !strings.Contains(out, "Operation not permitted") {
 		c.Fatalf("expected unshare with seccomp profile denied to fail, got %s", out)
 	}
 }
 
-// TestRunSeccompProfileDenyChmod checks that 'docker run --security-opt seccomp:/tmp/profile.json busybox chmod 400 /etc/hostname' exits with operation not permitted.
+// TestRunSeccompProfileDenyChmod checks that 'docker run --security-opt seccomp=/tmp/profile.json busybox chmod 400 /etc/hostname' exits with operation not permitted.
 func (s *DockerSuite) TestRunSeccompProfileDenyChmod(c *check.C) {
 	testRequires(c, SameHostDaemon, seccompEnabled)
 	jsonData := `{
@@ -758,7 +759,7 @@ func (s *DockerSuite) TestRunSeccompProfileDenyChmod(c *check.C) {
 	if _, err := tmpFile.Write([]byte(jsonData)); err != nil {
 		c.Fatal(err)
 	}
-	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp:"+tmpFile.Name(), "busybox", "chmod", "400", "/etc/hostname")
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp="+tmpFile.Name(), "busybox", "chmod", "400", "/etc/hostname")
 	out, _, _ := runCommandWithOutput(runCmd)
 	if !strings.Contains(out, "Operation not permitted") {
 		c.Fatalf("expected chmod with seccomp profile denied to fail, got %s", out)
@@ -795,7 +796,7 @@ func (s *DockerSuite) TestRunSeccompProfileDenyUnshareUserns(c *check.C) {
 	if _, err := tmpFile.Write([]byte(jsonData)); err != nil {
 		c.Fatal(err)
 	}
-	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "apparmor:unconfined", "--security-opt", "seccomp:"+tmpFile.Name(), "debian:jessie", "unshare", "--map-root-user", "--user", "sh", "-c", "whoami")
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "apparmor=unconfined", "--security-opt", "seccomp="+tmpFile.Name(), "debian:jessie", "unshare", "--map-root-user", "--user", "sh", "-c", "whoami")
 	out, _, _ := runCommandWithOutput(runCmd)
 	if !strings.Contains(out, "Operation not permitted") {
 		c.Fatalf("expected unshare userns with seccomp profile denied to fail, got %s", out)
@@ -815,21 +816,21 @@ func (s *DockerSuite) TestRunSeccompProfileDenyCloneUserns(c *check.C) {
 }
 
 // TestRunSeccompUnconfinedCloneUserns checks that
-// 'docker run --security-opt seccomp:unconfined syscall-test' allows creating a userns.
+// 'docker run --security-opt seccomp=unconfined syscall-test' allows creating a userns.
 func (s *DockerSuite) TestRunSeccompUnconfinedCloneUserns(c *check.C) {
-	testRequires(c, SameHostDaemon, seccompEnabled, NotUserNamespace)
+	testRequires(c, SameHostDaemon, seccompEnabled, UserNamespaceInKernel, NotUserNamespace)
 
 	// make sure running w privileged is ok
-	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp:unconfined", "syscall-test", "userns-test", "id")
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp=unconfined", "syscall-test", "userns-test", "id")
 	if out, _, err := runCommandWithOutput(runCmd); err != nil || !strings.Contains(out, "nobody") {
-		c.Fatalf("expected clone userns with --security-opt seccomp:unconfined to succeed, got %s: %v", out, err)
+		c.Fatalf("expected clone userns with --security-opt seccomp=unconfined to succeed, got %s: %v", out, err)
 	}
 }
 
 // TestRunSeccompAllowPrivCloneUserns checks that 'docker run --privileged syscall-test'
 // allows creating a userns.
 func (s *DockerSuite) TestRunSeccompAllowPrivCloneUserns(c *check.C) {
-	testRequires(c, SameHostDaemon, seccompEnabled, NotUserNamespace)
+	testRequires(c, SameHostDaemon, seccompEnabled, UserNamespaceInKernel, NotUserNamespace)
 
 	// make sure running w privileged is ok
 	runCmd := exec.Command(dockerBinary, "run", "--privileged", "syscall-test", "userns-test", "id")
@@ -872,7 +873,7 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	}()
 
 	go func() {
-		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp:unconfined", "syscall-test", "acct-test")
+		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp=unconfined", "syscall-test", "acct-test")
 		if err == nil || !strings.Contains(out, "No such file or directory") {
 			errChan <- fmt.Errorf("expected No such file or directory, got: %s", out)
 		}
@@ -880,7 +881,7 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	}()
 
 	go func() {
-		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp:unconfined", "syscall-test", "ns-test", "echo", "hello")
+		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp=unconfined", "syscall-test", "ns-test", "echo", "hello")
 		if err != nil || !strings.Contains(out, "hello") {
 			errChan <- fmt.Errorf("expected hello, got: %s, %v", out, err)
 		}
@@ -895,17 +896,114 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	}
 }
 
+// TestRunNoNewPrivSetuid checks that --security-opt=no-new-privileges prevents
+// effective uid transtions on executing setuid binaries.
+func (s *DockerSuite) TestRunNoNewPrivSetuid(c *check.C) {
+	testRequires(c, DaemonIsLinux, NotUserNamespace, SameHostDaemon)
+
+	// test that running a setuid binary results in no effective uid transition
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "no-new-privileges", "--user", "1000", "nnp-test", "/usr/bin/nnp-test")
+	if out, _, err := runCommandWithOutput(runCmd); err != nil || !strings.Contains(out, "EUID=1000") {
+		c.Fatalf("expected output to contain EUID=1000, got %s: %v", out, err)
+	}
+}
+
 func (s *DockerSuite) TestRunApparmorProcDirectory(c *check.C) {
 	testRequires(c, SameHostDaemon, Apparmor)
 
 	// running w seccomp unconfined tests the apparmor profile
-	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp:unconfined", "debian:jessie", "chmod", "777", "/proc/1/cgroup")
+	runCmd := exec.Command(dockerBinary, "run", "--security-opt", "seccomp=unconfined", "busybox", "chmod", "777", "/proc/1/cgroup")
 	if out, _, err := runCommandWithOutput(runCmd); err == nil || !(strings.Contains(out, "Permission denied") || strings.Contains(out, "Operation not permitted")) {
 		c.Fatalf("expected chmod 777 /proc/1/cgroup to fail, got %s: %v", out, err)
 	}
 
-	runCmd = exec.Command(dockerBinary, "run", "--security-opt", "seccomp:unconfined", "debian:jessie", "chmod", "777", "/proc/1/attr/current")
+	runCmd = exec.Command(dockerBinary, "run", "--security-opt", "seccomp=unconfined", "busybox", "chmod", "777", "/proc/1/attr/current")
 	if out, _, err := runCommandWithOutput(runCmd); err == nil || !(strings.Contains(out, "Permission denied") || strings.Contains(out, "Operation not permitted")) {
 		c.Fatalf("expected chmod 777 /proc/1/attr/current to fail, got %s: %v", out, err)
 	}
+}
+
+// make sure the default profile can be successfully parsed (using unshare as it is
+// something which we know is blocked in the default profile)
+func (s *DockerSuite) TestRunSeccompWithDefaultProfile(c *check.C) {
+	testRequires(c, SameHostDaemon, seccompEnabled)
+
+	out, _, err := dockerCmdWithError("run", "--security-opt", "seccomp=../profiles/seccomp/default.json", "debian:jessie", "unshare", "--map-root-user", "--user", "sh", "-c", "whoami")
+	c.Assert(err, checker.NotNil, check.Commentf(out))
+	c.Assert(strings.TrimSpace(out), checker.Equals, "unshare: unshare failed: Operation not permitted")
+}
+
+// TestRunDeviceSymlink checks run with device that follows symlink (#13840)
+func (s *DockerSuite) TestRunDeviceSymlink(c *check.C) {
+	testRequires(c, DaemonIsLinux, NotUserNamespace, NotArm, SameHostDaemon)
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		c.Skip("Host does not have /dev/zero")
+	}
+
+	// Create a temporary directory to create symlink
+	tmpDir, err := ioutil.TempDir("", "docker_device_follow_symlink_tests")
+	c.Assert(err, checker.IsNil)
+
+	defer os.RemoveAll(tmpDir)
+
+	// Create a symbolic link to /dev/zero
+	symZero := filepath.Join(tmpDir, "zero")
+	err = os.Symlink("/dev/zero", symZero)
+	c.Assert(err, checker.IsNil)
+
+	// Create a temporary file "temp" inside tmpDir, write some data to "tmpDir/temp",
+	// then create a symlink "tmpDir/file" to the temporary file "tmpDir/temp".
+	tmpFile := filepath.Join(tmpDir, "temp")
+	err = ioutil.WriteFile(tmpFile, []byte("temp"), 0666)
+	c.Assert(err, checker.IsNil)
+	symFile := filepath.Join(tmpDir, "file")
+	err = os.Symlink(tmpFile, symFile)
+	c.Assert(err, checker.IsNil)
+
+	// md5sum of 'dd if=/dev/zero bs=4K count=8' is bb7df04e1b0a2570657527a7e108ae23
+	out, _ := dockerCmd(c, "run", "--device", symZero+":/dev/symzero", "busybox", "sh", "-c", "dd if=/dev/symzero bs=4K count=8 | md5sum")
+	c.Assert(strings.Trim(out, "\r\n"), checker.Contains, "bb7df04e1b0a2570657527a7e108ae23", check.Commentf("expected output bb7df04e1b0a2570657527a7e108ae23"))
+
+	// symlink "tmpDir/file" to a file "tmpDir/temp" will result in an error as it is not a device.
+	out, _, err = dockerCmdWithError("run", "--device", symFile+":/dev/symzero", "busybox", "sh", "-c", "dd if=/dev/symzero bs=4K count=8 | md5sum")
+	c.Assert(err, check.NotNil)
+	c.Assert(strings.Trim(out, "\r\n"), checker.Contains, "not a device node", check.Commentf("expected output 'not a device node'"))
+}
+
+// TestRunPidsLimit makes sure the pids cgroup is set with --pids-limit
+func (s *DockerSuite) TestRunPidsLimit(c *check.C) {
+	testRequires(c, pidsLimit)
+
+	file := "/sys/fs/cgroup/pids/pids.max"
+	out, _ := dockerCmd(c, "run", "--name", "skittles", "--pids-limit", "2", "busybox", "cat", file)
+	c.Assert(strings.TrimSpace(out), checker.Equals, "2")
+
+	out = inspectField(c, "skittles", "HostConfig.PidsLimit")
+	c.Assert(out, checker.Equals, "2", check.Commentf("setting the pids limit failed"))
+}
+
+func (s *DockerSuite) TestRunPrivilegedAllowedDevices(c *check.C) {
+	testRequires(c, DaemonIsLinux, NotUserNamespace)
+
+	file := "/sys/fs/cgroup/devices/devices.list"
+	out, _ := dockerCmd(c, "run", "--privileged", "busybox", "cat", file)
+	c.Logf("out: %q", out)
+	c.Assert(strings.TrimSpace(out), checker.Equals, "a *:* rwm")
+}
+
+func (s *DockerSuite) TestRunUserDeviceAllowed(c *check.C) {
+	testRequires(c, DaemonIsLinux)
+
+	fi, err := os.Stat("/dev/snd/timer")
+	if err != nil {
+		c.Skip("Host does not have /dev/snd/timer")
+	}
+	stat, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		c.Skip("Could not stat /dev/snd/timer")
+	}
+
+	file := "/sys/fs/cgroup/devices/devices.list"
+	out, _ := dockerCmd(c, "run", "--device", "/dev/snd/timer:w", "busybox", "cat", file)
+	c.Assert(out, checker.Contains, fmt.Sprintf("c %d:%d w", stat.Rdev/256, stat.Rdev%256))
 }

@@ -1,12 +1,12 @@
 package volume
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
 
 	"github.com/Sirupsen/logrus"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/system"
 )
 
@@ -60,6 +60,11 @@ type MountPoint struct {
 	// Note Propagation is not used on Windows
 	Propagation string // Mount propagation string
 	Named       bool   // specifies if the mountpoint was specified by name
+
+	// Specifies if data should be copied from the container before the first mount
+	// Use a pointer here so we can tell if the user set this value explicitly
+	// This allows us to error out when the user explicitly enabled copy but we can't copy due to the volume being populated
+	CopyData bool `json:"-"`
 }
 
 // Setup sets up a mount point by either mounting the volume if it is
@@ -82,7 +87,7 @@ func (m *MountPoint) Setup() (string, error) {
 		}
 		return m.Source, nil
 	}
-	return "", derr.ErrorCodeMountSetup
+	return "", fmt.Errorf("Unable to setup mount point, neither source nor volume defined")
 }
 
 // Path returns the path of a volume in a mount point.
@@ -93,10 +98,10 @@ func (m *MountPoint) Path() string {
 	return m.Source
 }
 
-// ParseVolumesFrom ensure that the supplied volumes-from is valid.
+// ParseVolumesFrom ensures that the supplied volumes-from is valid.
 func ParseVolumesFrom(spec string) (string, string, error) {
 	if len(spec) == 0 {
-		return "", "", derr.ErrorCodeVolumeFromBlank.WithArgs(spec)
+		return "", "", fmt.Errorf("malformed volumes-from specification: %s", spec)
 	}
 
 	specParts := strings.SplitN(spec, ":", 2)
@@ -106,15 +111,27 @@ func ParseVolumesFrom(spec string) (string, string, error) {
 	if len(specParts) == 2 {
 		mode = specParts[1]
 		if !ValidMountMode(mode) {
-			return "", "", derr.ErrorCodeVolumeInvalidMode.WithArgs(mode)
+			return "", "", errInvalidMode(mode)
 		}
 		// For now don't allow propagation properties while importing
 		// volumes from data container. These volumes will inherit
 		// the same propagation property as of the original volume
 		// in data container. This probably can be relaxed in future.
 		if HasPropagation(mode) {
-			return "", "", derr.ErrorCodeVolumeInvalidMode.WithArgs(mode)
+			return "", "", errInvalidMode(mode)
+		}
+		// Do not allow copy modes on volumes-from
+		if _, isSet := getCopyMode(mode); isSet {
+			return "", "", errInvalidMode(mode)
 		}
 	}
 	return id, mode, nil
+}
+
+func errInvalidMode(mode string) error {
+	return fmt.Errorf("invalid mode: %v", mode)
+}
+
+func errInvalidSpec(spec string) error {
+	return fmt.Errorf("Invalid volume specification: '%s'", spec)
 }

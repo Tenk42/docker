@@ -10,6 +10,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	apiserver "github.com/docker/docker/api/server"
 	"github.com/docker/docker/daemon"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/pkg/mflag"
 	"github.com/docker/docker/pkg/system"
 )
@@ -50,8 +51,21 @@ func setupConfigReloadTrap(configFile string, flags *mflag.FlagSet, reload func(
 			logrus.Debugf("Config reload - waiting signal at %s", ev)
 			for {
 				syscall.WaitForSingleObject(h, syscall.INFINITE)
-				daemon.ReloadConfiguration(configFile, flags, reload)
+				if err := daemon.ReloadConfiguration(configFile, flags, reload); err != nil {
+					logrus.Error(err)
+				}
 			}
 		}
 	}()
+}
+
+func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
+	return nil
+}
+
+// getLibcontainerdRoot gets the root directory for libcontainerd to store its
+// state. The Windows libcontainerd implementation does not need to write a spec
+// or state to disk, so this is a no-op.
+func (cli *DaemonCli) getLibcontainerdRoot() string {
+	return ""
 }

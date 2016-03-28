@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	defaultPidFile = "/var/run/docker.pid"
-	defaultGraph   = "/var/lib/docker"
-	defaultExec    = "native"
+	defaultPidFile  = "/var/run/docker.pid"
+	defaultGraph    = "/var/lib/docker"
+	defaultExecRoot = "/var/run/docker"
 )
 
 // Config defines the configuration of a docker daemon.
@@ -25,11 +25,13 @@ type Config struct {
 
 	// Fields below here are platform specific.
 
+	CgroupParent         string                   `json:"cgroup-parent,omitempty"`
+	ContainerdAddr       string                   `json:"containerd,omitempty"`
 	CorsHeaders          string                   `json:"api-cors-headers,omitempty"`
 	EnableCors           bool                     `json:"api-enable-cors,omitempty"`
 	EnableSelinuxSupport bool                     `json:"selinux-enabled,omitempty"`
+	ExecRoot             string                   `json:"exec-root,omitempty"`
 	RemappedRoot         string                   `json:"userns-remap,omitempty"`
-	CgroupParent         string                   `json:"cgroup-parent,omitempty"`
 	Ulimits              map[string]*units.Ulimit `json:"default-ulimits,omitempty"`
 }
 
@@ -68,6 +70,7 @@ func (config *Config) InstallFlags(cmd *flag.FlagSet, usageFn func(string) strin
 	cmd.BoolVar(&config.bridgeConfig.EnableIPForward, []string{"#ip-forward", "-ip-forward"}, true, usageFn("Enable net.ipv4.ip_forward"))
 	cmd.BoolVar(&config.bridgeConfig.EnableIPMasq, []string{"-ip-masq"}, true, usageFn("Enable IP masquerading"))
 	cmd.BoolVar(&config.bridgeConfig.EnableIPv6, []string{"-ipv6"}, false, usageFn("Enable IPv6 networking"))
+	cmd.StringVar(&config.ExecRoot, []string{"-exec-root"}, defaultExecRoot, usageFn("Root directory for execution state files"))
 	cmd.StringVar(&config.bridgeConfig.IP, []string{"#bip", "-bip"}, "", usageFn("Specify network bridge IP"))
 	cmd.StringVar(&config.bridgeConfig.Iface, []string{"b", "-bridge"}, "", usageFn("Attach containers to a network bridge"))
 	cmd.StringVar(&config.bridgeConfig.FixedCIDR, []string{"-fixed-cidr"}, "", usageFn("IPv4 subnet for fixed IPs"))
@@ -81,6 +84,7 @@ func (config *Config) InstallFlags(cmd *flag.FlagSet, usageFn func(string) strin
 	cmd.StringVar(&config.CorsHeaders, []string{"-api-cors-header"}, "", usageFn("Set CORS headers in the remote API"))
 	cmd.StringVar(&config.CgroupParent, []string{"-cgroup-parent"}, "", usageFn("Set parent cgroup for all containers"))
 	cmd.StringVar(&config.RemappedRoot, []string{"-userns-remap"}, "", usageFn("User/Group setting for user namespaces"))
+	cmd.StringVar(&config.ContainerdAddr, []string{"-containerd"}, "", usageFn("Path to containerd socket"))
 
 	config.attachExperimentalFlags(cmd, usageFn)
 }

@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/api/server/httputils"
@@ -17,7 +17,6 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/pkg/progress"
 	"github.com/docker/docker/pkg/streamformatter"
-	"github.com/docker/docker/utils"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/container"
 	"github.com/docker/go-units"
@@ -84,7 +83,28 @@ func newImageBuildOptions(ctx context.Context, r *http.Request) (*types.ImageBui
 		}
 		options.BuildArgs = buildArgs
 	}
+	var labels = map[string]string{}
+	labelsJSON := r.FormValue("labels")
+	if labelsJSON != "" {
+		if err := json.NewDecoder(strings.NewReader(labelsJSON)).Decode(&labels); err != nil {
+			return nil, err
+		}
+		options.Labels = labels
+	}
+
 	return options, nil
+}
+
+type syncWriter struct {
+	w  io.Writer
+	mu sync.Mutex
+}
+
+func (s *syncWriter) Write(b []byte) (count int, err error) {
+	s.mu.Lock()
+	count, err = s.w.Write(b)
+	s.mu.Unlock()
+	return
 }
 
 func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
@@ -117,7 +137,7 @@ func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *
 		if !output.Flushed() {
 			return err
 		}
-		_, err = w.Write(sf.FormatError(errors.New(utils.GetErrorMessage(err))))
+		_, err = w.Write(sf.FormatError(err))
 		if err != nil {
 			logrus.Warnf("could not write error response: %v", err)
 		}
@@ -141,17 +161,12 @@ func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *
 		return progress.NewProgressReader(in, progressOutput, r.ContentLength, "Downloading context", remoteURL)
 	}
 
-	var (
-		context        builder.ModifiableContext
-		dockerfileName string
-		out            io.Writer
-	)
-	context, dockerfileName, err = builder.DetectContextFromRemoteURL(r.Body, remoteURL, createProgressReader)
+	buildContext, dockerfileName, err := builder.DetectContextFromRemoteURL(r.Body, remoteURL, createProgressReader)
 	if err != nil {
 		return errf(err)
 	}
 	defer func() {
-		if err := context.Close(); err != nil {
+		if err := buildContext.Close(); err != nil {
 			logrus.Debugf("[BUILDER] failed to remove temporary context: %v", err)
 		}
 	}()
@@ -161,22 +176,32 @@ func (br *buildRouter) postBuild(ctx context.Context, w http.ResponseWriter, r *
 
 	buildOptions.AuthConfigs = authConfigs
 
-	out = output
+	var out io.Writer = output
 	if buildOptions.SuppressOutput {
 		out = notVerboseBuffer
 	}
+	out = &syncWriter{w: out}
 	stdout := &streamformatter.StdoutFormatter{Writer: out, StreamFormatter: sf}
 	stderr := &streamformatter.StderrFormatter{Writer: out, StreamFormatter: sf}
 
-	closeNotifier := make(<-chan bool)
+	finished := make(chan struct{})
+	defer close(finished)
 	if notifier, ok := w.(http.CloseNotifier); ok {
-		closeNotifier = notifier.CloseNotify()
+		notifyContext, cancel := context.WithCancel(ctx)
+		closeNotifier := notifier.CloseNotify()
+		go func() {
+			select {
+			case <-closeNotifier:
+				cancel()
+			case <-finished:
+			}
+		}()
+		ctx = notifyContext
 	}
 
-	imgID, err := br.backend.Build(buildOptions,
-		builder.DockerIgnoreContext{ModifiableContext: context},
-		stdout, stderr, out,
-		closeNotifier)
+	imgID, err := br.backend.Build(ctx, buildOptions,
+		builder.DockerIgnoreContext{ModifiableContext: buildContext},
+		stdout, stderr, out)
 	if err != nil {
 		return errf(err)
 	}

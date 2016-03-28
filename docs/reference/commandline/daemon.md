@@ -32,8 +32,8 @@ weight = -1
       --dns-opt=[]                           DNS options to use
       --dns-search=[]                        DNS search domains to use
       --default-ulimit=[]                    Set default ulimit settings for containers
-      --exec-opt=[]                          Set exec driver options
-      --exec-root="/var/run/docker"          Root of the Docker execdriver
+      --exec-opt=[]                          Set runtime execution options
+      --exec-root="/var/run/docker"          Root directory for execution state files
       --fixed-cidr=""                        IPv4 subnet for fixed IPs
       --fixed-cidr-v6=""                     IPv6 subnet for fixed IPs
       -G, --group="docker"                   Group for the unix socket
@@ -438,6 +438,32 @@ options for `zfs` start with `zfs`.
     when unintentional leaking of mount point happens across multiple mount
     namespaces.
 
+*  `dm.min_free_space`
+
+    Specifies the min free space percent in thin pool require for new device
+    creation to succeed. This check applies to both free data space as well
+    as free metadata space. Valid values are from 0% - 99%. Value 0% disables
+    free space checking logic. If user does not specify a value for this optoin,
+    then default value for this option is 10%.
+
+    Whenever a new thin pool device is created (during docker pull or
+    during container creation), docker will check minimum free space is
+    available as specified by this parameter. If that is not the case, then
+    device creation will fail and docker operation will fail.
+
+    One will have to create more free space in thin pool to recover from the
+    error. Either delete some of the images and containers from thin pool and
+    create free space or add more storage to thin pool.
+
+    For lvm thin pool, one can add more storage to volume group container thin
+    pool and that should automatically resolve it. If loop devices are being
+    used, then stop docker, grow the size of loop files and restart docker and
+    that should resolve the issue.
+
+    Example use:
+
+        $ docker daemon --storage-opt dm.min_free_space_percent=10%
+
 Currently supported options of `zfs`:
 
 * `zfs.fsname`
@@ -450,24 +476,26 @@ Currently supported options of `zfs`:
 
         $ docker daemon -s zfs --storage-opt zfs.fsname=zroot/docker
 
-## Docker execdriver option
+## Docker runtime execution options
 
-The Docker daemon uses a specifically built `libcontainer` execution driver as
-its interface to the Linux kernel `namespaces`, `cgroups`, and `SELinux`.
+The Docker daemon relies on a
+[OCI](https://github.com/opencontainers/specs) compliant runtime
+(invoked via the `containerd` daemon) as its interface to the Linux
+kernel `namespaces`, `cgroups`, and `SELinux`.
 
-## Options for the native execdriver
+## Options for the runtime
 
-You can configure the `native` (libcontainer) execdriver using options specified
+You can configure the runtime using options specified
 with the `--exec-opt` flag. All the flag's options have the `native` prefix. A
 single `native.cgroupdriver` option is available.
 
 The `native.cgroupdriver` option specifies the management of the container's
-cgroups. You can specify `cgroupfs` or `systemd`. If you specify `systemd` and
-it is not available, the system uses `cgroupfs`. If you omit the
+cgroups. You can specify only specify `cgroupfs` at the moment.  If you omit the
 `native.cgroupdriver` option,` cgroupfs` is used.
-This example sets the `cgroupdriver` to `systemd`:
 
-    $ sudo docker daemon --exec-opt native.cgroupdriver=systemd
+This example explicitely sets the `cgroupdriver` to `cgroupfs`:
+
+    $ sudo docker daemon --exec-opt native.cgroupdriver=cgroupfs
 
 Setting this option applies to all containers the daemon launches.
 
@@ -644,7 +672,7 @@ multiple plugins installed, at least one must allow the request for it to
 complete.
 
 For information about how to create an authorization plugin, see [authorization
-plugin](../../extend/authorization.md) section in the Docker extend section of this documentation.
+plugin](../../extend/plugins_authorization.md) section in the Docker extend section of this documentation.
 
 
 ## Daemon user namespace options
@@ -696,11 +724,17 @@ these resources are name-based, not id-based.  If the numeric ID information
 provided does not exist as entries in `/etc/passwd` or `/etc/group`, daemon
 startup will fail with an error message.
 
+> **Note:** On Fedora 22, you have to `touch` the `/etc/subuid` and `/etc/subgid`
+> files to have ranges assigned when users are created.  This must be done
+> *before* the `--userns-remap` option is enabled. Once these files exist, the
+> daemon can be (re)started and range assignment on user creation works properly.
+
 *Example: starting with default Docker user management:*
 
+```bash
+$ docker daemon --userns-remap=default
 ```
-     $ docker daemon --userns-remap=default
-```    
+
 When `default` is provided, Docker will create - or find the existing - user and group
 named `dockremap`. If the user is created, and the Linux distribution has
 appropriate support, the `/etc/subuid` and `/etc/subgid` files will be populated
@@ -709,16 +743,11 @@ at an offset based on prior entries in those files.  For example, Ubuntu will
 create the following range, based on an existing user named `user1` already owning
 the first 65536 range:
 
+```bash
+$ cat /etc/subuid
+user1:100000:65536
+dockremap:165536:65536
 ```
-     $ cat /etc/subuid
-     user1:100000:65536
-     dockremap:165536:65536
-```
-
-> **Note:** On a fresh Fedora install, we had to `touch` the
-> `/etc/subuid` and `/etc/subgid` files to have ranges assigned when users
-> were created.  Once these files existed, range assignment on user creation
-> worked properly.
 
 If you have a preferred/self-managed user with subordinate ID mappings already
 configured, you can provide that username or uid to the `--userns-remap` flag.
@@ -749,17 +778,25 @@ following algorithm to create the mapping ranges:
 2. Map segments will be created from each range in increasing value with a length matching the length of each segment. Therefore the range segment with the lowest numeric starting value will be equal to the remapped root, and continue up through host uid/gid equal to the range segment length. As an example, if the lowest segment starts at ID 1000 and has a length of 100, then a map of 1000 -> 0 (the remapped root) up through 1100 -> 100 will be created from this segment. If the next segment starts at ID 10000, then the next map will start with mapping 10000 -> 101 up to the length of this second segment. This will continue until no more segments are found in the subordinate files for this user.
 3. If more than five range segments exist for a single user, only the first five will be utilized, matching the kernel's limitation of only five entries in `/proc/self/uid_map` and `proc/self/gid_map`.
 
+### Disable user namespace for a container
+
+If you enable user namespaces on the daemon, all containers are started
+with user namespaces enabled. In some situations you might want to disable
+this feature for a container, for example, to start a privileged container (see
+[user namespace known restrictions](#user-namespace-known-restrictions)).
+To enable those advanced features for a specific container use `--userns=host`
+in the `run/exec/create` command.
+This option will completely disable user namespace mapping for the container's user.
+
 ### User namespace known restrictions
 
 The following standard Docker features are currently incompatible when
 running a Docker daemon with user namespaces enabled:
 
  - sharing PID or NET namespaces with the host (`--pid=host` or `--net=host`)
- - sharing a network namespace with an existing container (`--net=container:*other*`)
- - sharing an IPC namespace with an existing container (`--ipc=container:*other*`)
  - A `--readonly` container filesystem (this is a Linux kernel restriction against remounting with modified flags of a currently mounted filesystem when inside a user namespace)
  - external (volume or graph) drivers which are unaware/incapable of using daemon user mappings
- - Using `--privileged` mode flag on `docker run`
+ - Using `--privileged` mode flag on `docker run` (unless also specifying `--userns=host`)
 
 In general, user namespaces are an advanced feature and will require
 coordination with other capabilities. For example, if volumes are mounted from
@@ -804,6 +841,14 @@ Assuming the daemon is running in cgroup `daemoncgroup`,
 `--cgroup-parent=/foobar` creates a cgroup in
 `/sys/fs/cgroup/memory/foobar`, whereas using `--cgroup-parent=foobar`
 creates the cgroup in `/sys/fs/cgroup/memory/daemoncgroup/foobar`
+
+The systemd cgroup driver has different rules for `--cgroup-parent`. Systemd
+represents hierarchy by slice and the name of the slice encodes the location in
+the tree. So `--cgroup-parent` for systemd cgroups should be a slice name. A
+name can consist of a dash-separated series of names, which describes the path
+to the slice from the root slice. For example, `--cgroup-parent=user-a-b.slice`
+means the memory cgroup for the container is created in
+`/sys/fs/cgroup/memory/user.slice/user-a.slice/user-a-b.slice/docker-<id>.scope`.
 
 This setting can also be set per container, using the `--cgroup-parent`
 option on `docker create` and `docker run`, and takes precedence over
@@ -874,7 +919,10 @@ This is a full example of the allowed configuration options in the file:
 	"default-gateway": "",
 	"default-gateway-v6": "",
 	"icc": false,
-	"raw-logs": false
+	"raw-logs": false,
+	"registry-mirrors": [],
+	"insecure-registries": [],
+	"disable-legacy-registry": false
 }
 ```
 
@@ -897,6 +945,8 @@ The list of currently supported options that can be reconfigured is this:
 
 Updating and reloading the cluster configurations such as `--cluster-store`,
 `--cluster-advertise` and `--cluster-store-opts` will take effect only if
-these configurations were not previously configured. Configuration reload will
-log a warning message if it detects a change in previously configured cluster
-configurations.
+these configurations were not previously configured. If `--cluster-store`
+has been provided in flags and `cluster-advertise` not, `cluster-advertise`
+can be added in the configuration file without accompanied by `--cluster-store`
+Configuration reload will log a warning message if it detects a change in
+previously configured cluster configurations.

@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution/uuid"
 	apiserver "github.com/docker/docker/api/server"
+	"github.com/docker/docker/api/server/router"
 	"github.com/docker/docker/api/server/router/build"
 	"github.com/docker/docker/api/server/router/container"
 	"github.com/docker/docker/api/server/router/image"
@@ -27,6 +29,7 @@ import (
 	"github.com/docker/docker/daemon/logger"
 	"github.com/docker/docker/docker/listeners"
 	"github.com/docker/docker/dockerversion"
+	"github.com/docker/docker/libcontainerd"
 	"github.com/docker/docker/opts"
 	"github.com/docker/docker/pkg/jsonlog"
 	flag "github.com/docker/docker/pkg/mflag"
@@ -50,8 +53,7 @@ var (
 // DaemonCli represents the daemon CLI.
 type DaemonCli struct {
 	*daemon.Config
-	registryOptions *registry.Options
-	flags           *flag.FlagSet
+	flags *flag.FlagSet
 }
 
 func presentInHelp(usage string) string { return usage }
@@ -66,17 +68,17 @@ func NewDaemonCli() *DaemonCli {
 	daemonConfig.LogConfig.Config = make(map[string]string)
 	daemonConfig.ClusterOpts = make(map[string]string)
 
+	if runtime.GOOS != "linux" {
+		daemonConfig.V2Only = true
+	}
+
 	daemonConfig.InstallFlags(daemonFlags, presentInHelp)
 	daemonConfig.InstallFlags(flag.CommandLine, absentFromHelp)
-	registryOptions := new(registry.Options)
-	registryOptions.InstallFlags(daemonFlags, presentInHelp)
-	registryOptions.InstallFlags(flag.CommandLine, absentFromHelp)
 	daemonFlags.Require(flag.Exact, 0)
 
 	return &DaemonCli{
-		Config:          daemonConfig,
-		registryOptions: registryOptions,
-		flags:           daemonFlags,
+		Config: daemonConfig,
+		flags:  daemonFlags,
 	}
 }
 
@@ -262,8 +264,13 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	}
 	cli.TrustKeyPath = commonFlags.TrustKey
 
-	registryService := registry.NewService(cli.registryOptions)
-	d, err := daemon.NewDaemon(cli.Config, registryService)
+	registryService := registry.NewService(cli.Config.ServiceOptions)
+	containerdRemote, err := libcontainerd.New(cli.getLibcontainerdRoot(), cli.getPlatformRemoteOptions()...)
+	if err != nil {
+		logrus.Fatal(err)
+	}
+
+	d, err := daemon.NewDaemon(cli.Config, registryService, containerdRemote)
 	if err != nil {
 		if pfile != nil {
 			if err := pfile.Remove(); err != nil {
@@ -278,7 +285,6 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	logrus.WithFields(logrus.Fields{
 		"version":     dockerversion.Version,
 		"commit":      dockerversion.GitCommit,
-		"execdriver":  d.ExecutionDriver().Name(),
 		"graphdriver": d.GraphDriverName(),
 	}).Info("Docker daemon")
 
@@ -289,15 +295,17 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 			logrus.Errorf("Error reconfiguring the daemon: %v", err)
 			return
 		}
+		if config.IsValueSet("debug") {
+			debugEnabled := utils.IsDebugEnabled()
+			switch {
+			case debugEnabled && !config.Debug: // disable debug
+				utils.DisableDebug()
+				api.DisableProfiler()
+			case config.Debug && !debugEnabled: // enable debug
+				utils.EnableDebug()
+				api.EnableProfiler()
+			}
 
-		debugEnabled := utils.IsDebugEnabled()
-		switch {
-		case debugEnabled && !config.Debug: // disable debug
-			utils.DisableDebug()
-			api.DisableProfiler()
-		case config.Debug && !debugEnabled: // enable debug
-			utils.EnableDebug()
-			api.EnableProfiler()
 		}
 	}
 
@@ -327,6 +335,7 @@ func (cli *DaemonCli) CmdDaemon(args ...string) error {
 	// Wait for serve API to complete
 	errAPI := <-serveAPIWait
 	shutdownDaemon(d, 15)
+	containerdRemote.Cleanup()
 	if errAPI != nil {
 		if pfile != nil {
 			if err := pfile.Remove(); err != nil {
@@ -396,11 +405,16 @@ func loadDaemonCliConfig(config *daemon.Config, daemonFlags *flag.FlagSet, commo
 }
 
 func initRouter(s *apiserver.Server, d *daemon.Daemon) {
-	s.InitRouter(utils.IsDebugEnabled(),
+	routers := []router.Router{
 		container.NewRouter(d),
 		image.NewRouter(d),
-		network.NewRouter(d),
 		systemrouter.NewRouter(d),
 		volume.NewRouter(d),
-		build.NewRouter(dockerfile.NewBuildManager(d)))
+		build.NewRouter(dockerfile.NewBuildManager(d)),
+	}
+	if d.NetworkControllerEnabled() {
+		routers = append(routers, network.NewRouter(d))
+	}
+
+	s.InitRouter(utils.IsDebugEnabled(), routers...)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/docker/distribution/registry/api/errcode"
 	"github.com/docker/distribution/registry/api/v2"
 	"github.com/docker/distribution/registry/client"
+	"github.com/docker/distribution/registry/client/auth"
 	"github.com/docker/docker/distribution/xfer"
 )
 
@@ -31,6 +32,10 @@ type fallbackError struct {
 	// supports the v2 protocol. This is used to limit fallbacks to the v1
 	// protocol.
 	confirmedV2 bool
+	// transportOK is set to true if we managed to speak HTTP with the
+	// registry. This confirms that we're using appropriate TLS settings
+	// (or lack of TLS).
+	transportOK bool
 }
 
 // Error renders the FallbackError as a string.
@@ -79,13 +84,19 @@ func continueOnError(err error) bool {
 func retryOnError(err error) error {
 	switch v := err.(type) {
 	case errcode.Errors:
-		return retryOnError(v[0])
+		if len(v) != 0 {
+			return retryOnError(v[0])
+		}
 	case errcode.Error:
 		switch v.Code {
 		case errcode.ErrorCodeUnauthorized, errcode.ErrorCodeUnsupported, errcode.ErrorCodeDenied:
 			return xfer.DoNotRetry{Err: err}
 		}
 	case *url.Error:
+		switch v.Err {
+		case auth.ErrNoBasicAuthCredentials, auth.ErrNoToken:
+			return xfer.DoNotRetry{Err: v.Err}
+		}
 		return retryOnError(v.Err)
 	case *client.UnexpectedHTTPResponseError:
 		return xfer.DoNotRetry{Err: err}

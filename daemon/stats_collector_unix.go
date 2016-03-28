@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -12,15 +13,14 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
-	"github.com/docker/docker/daemon/execdriver"
-	derr "github.com/docker/docker/errors"
 	"github.com/docker/docker/pkg/pubsub"
+	"github.com/docker/engine-api/types"
 	"github.com/opencontainers/runc/libcontainer/system"
 )
 
 type statsSupervisor interface {
 	// GetContainerStats collects all the stats related to a container
-	GetContainerStats(container *container.Container) (*execdriver.ResourceStats, error)
+	GetContainerStats(container *container.Container) (*types.StatsJSON, error)
 }
 
 // newStatsCollector returns a new statsCollector that collections
@@ -120,12 +120,13 @@ func (s *statsCollector) run() {
 		for _, pair := range pairs {
 			stats, err := s.supervisor.GetContainerStats(pair.container)
 			if err != nil {
-				if err != execdriver.ErrNotRunning {
+				if _, ok := err.(errNotRunning); !ok {
 					logrus.Errorf("collecting stats for %s: %v", pair.container.ID, err)
 				}
 				continue
 			}
-			stats.SystemUsage = systemUsage
+			// FIXME: move to containerd
+			stats.CPUStats.SystemUsage = systemUsage
 
 			pair.publisher.Publish(stats)
 		}
@@ -163,13 +164,13 @@ func (s *statsCollector) getSystemCPUUsage() (uint64, error) {
 		switch parts[0] {
 		case "cpu":
 			if len(parts) < 8 {
-				return 0, derr.ErrorCodeBadCPUFields
+				return 0, fmt.Errorf("invalid number of cpu fields")
 			}
 			var totalClockTicks uint64
 			for _, i := range parts[1:8] {
 				v, err := strconv.ParseUint(i, 10, 64)
 				if err != nil {
-					return 0, derr.ErrorCodeBadCPUInt.WithArgs(i, err)
+					return 0, fmt.Errorf("Unable to convert value %s to int: %s", i, err)
 				}
 				totalClockTicks += v
 			}
@@ -177,5 +178,5 @@ func (s *statsCollector) getSystemCPUUsage() (uint64, error) {
 				s.clockTicksPerSecond, nil
 		}
 	}
-	return 0, derr.ErrorCodeBadStatFormat
+	return 0, fmt.Errorf("invalid stat format. Error trying to parse the '/proc/stat' file")
 }

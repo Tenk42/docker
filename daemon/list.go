@@ -9,6 +9,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/image"
+	"github.com/docker/docker/volume"
 	"github.com/docker/engine-api/types"
 	"github.com/docker/engine-api/types/filters"
 	networktypes "github.com/docker/engine-api/types/network"
@@ -17,6 +18,21 @@ import (
 
 var acceptedVolumeFilterTags = map[string]bool{
 	"dangling": true,
+	"name":     true,
+	"driver":   true,
+}
+
+var acceptedPsFilterTags = map[string]bool{
+	"ancestor":  true,
+	"before":    true,
+	"exited":    true,
+	"id":        true,
+	"isolation": true,
+	"label":     true,
+	"name":      true,
+	"status":    true,
+	"since":     true,
+	"volume":    true,
 }
 
 // iterationAction represents possible outcomes happening during the container iteration.
@@ -127,7 +143,12 @@ func (daemon *Daemon) reducePsContainer(container *container.Container, ctx *lis
 func (daemon *Daemon) foldFilter(config *types.ContainerListOptions) (*listContext, error) {
 	psFilters := config.Filter
 
+	if err := psFilters.Validate(acceptedPsFilterTags); err != nil {
+		return nil, err
+	}
+
 	var filtExited []int
+
 	err := psFilters.WalkValues("exited", func(value string) error {
 		code, err := strconv.Atoi(value)
 		if err != nil {
@@ -222,11 +243,27 @@ func (daemon *Daemon) foldFilter(config *types.ContainerListOptions) (*listConte
 	}, nil
 }
 
-// includeContainerInList decides whether a containers should be include in the output or not based in the filter.
+// includeContainerInList decides whether a container should be included in the output or not based in the filter.
 // It also decides if the iteration should be stopped or not.
 func includeContainerInList(container *container.Container, ctx *listContext) iterationAction {
+	// Do not include container if it's in the list before the filter container.
+	// Set the filter container to nil to include the rest of containers after this one.
+	if ctx.beforeFilter != nil {
+		if container.ID == ctx.beforeFilter.ID {
+			ctx.beforeFilter = nil
+		}
+		return excludeContainer
+	}
+
+	// Stop iteration when the container arrives to the filter container
+	if ctx.sinceFilter != nil {
+		if container.ID == ctx.sinceFilter.ID {
+			return stopIteration
+		}
+	}
+
 	// Do not include container if it's stopped and we're not filters
-	// FIXME remove the ctx.beforContainer part of the condition for 1.12 as --since and --before are deprecated
+	// FIXME remove the ctx.beforContainer and ctx.sinceContainer part of the condition for 1.12 as --since and --before are deprecated
 	if !container.Running && !ctx.All && ctx.Limit <= 0 && ctx.beforeContainer == nil && ctx.sinceContainer == nil {
 		return excludeContainer
 	}
@@ -266,22 +303,6 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 		}
 	}
 
-	// Do not include container if it's in the list before the filter container.
-	// Set the filter container to nil to include the rest of containers after this one.
-	if ctx.beforeFilter != nil {
-		if container.ID == ctx.beforeFilter.ID {
-			ctx.beforeFilter = nil
-		}
-		return excludeContainer
-	}
-
-	// Stop iteration when the container arrives to the filter container
-	if ctx.sinceFilter != nil {
-		if container.ID == ctx.sinceFilter.ID {
-			return stopIteration
-		}
-	}
-
 	// Stop iteration when the index is over the limit
 	if ctx.Limit > 0 && ctx.idx == ctx.Limit {
 		return stopIteration
@@ -306,6 +327,31 @@ func includeContainerInList(container *container.Container, ctx *listContext) it
 		return excludeContainer
 	}
 
+	if ctx.filters.Include("volume") {
+		volumesByName := make(map[string]*volume.MountPoint)
+		for _, m := range container.MountPoints {
+			if m.Name != "" {
+				volumesByName[m.Name] = m
+			} else {
+				volumesByName[m.Source] = m
+			}
+		}
+
+		volumeExist := fmt.Errorf("volume mounted in container")
+		err := ctx.filters.WalkValues("volume", func(value string) error {
+			if _, exist := container.MountPoints[value]; exist {
+				return volumeExist
+			}
+			if _, exist := volumesByName[value]; exist {
+				return volumeExist
+			}
+			return nil
+		})
+		if err != volumeExist {
+			return excludeContainer
+		}
+	}
+
 	if ctx.ancestorFilter {
 		if len(ctx.images) == 0 {
 			return excludeContainer
@@ -326,7 +372,7 @@ func (daemon *Daemon) transformContainer(container *container.Container, ctx *li
 		ImageID: container.ImageID.String(),
 	}
 	if newC.Names == nil {
-		// Dead containers will often have no name, so make sure the response isn't  null
+		// Dead containers will often have no name, so make sure the response isn't null
 		newC.Names = []string{}
 	}
 
@@ -419,6 +465,7 @@ func (daemon *Daemon) transformContainer(container *container.Container, ctx *li
 		newC.SizeRootFs = sizeRootFs
 	}
 	newC.Labels = container.Config.Labels
+	newC.Mounts = addMountPoints(container)
 
 	return newC, nil
 }
@@ -427,8 +474,7 @@ func (daemon *Daemon) transformContainer(container *container.Container, ctx *li
 // of volumes returned.
 func (daemon *Daemon) Volumes(filter string) ([]*types.Volume, []string, error) {
 	var (
-		volumesOut   []*types.Volume
-		danglingOnly = false
+		volumesOut []*types.Volume
 	)
 	volFilters, err := filters.FromParam(filter)
 	if err != nil {
@@ -439,25 +485,49 @@ func (daemon *Daemon) Volumes(filter string) ([]*types.Volume, []string, error) 
 		return nil, nil, err
 	}
 
-	if volFilters.Include("dangling") {
-		if volFilters.ExactMatch("dangling", "true") || volFilters.ExactMatch("dangling", "1") {
-			danglingOnly = true
-		} else if !volFilters.ExactMatch("dangling", "false") && !volFilters.ExactMatch("dangling", "0") {
-			return nil, nil, fmt.Errorf("Invalid filter 'dangling=%s'", volFilters.Get("dangling"))
-		}
-	}
-
 	volumes, warnings, err := daemon.volumes.List()
+	filterVolumes, err := daemon.filterVolumes(volumes, volFilters)
 	if err != nil {
 		return nil, nil, err
 	}
-	if volFilters.Include("dangling") {
-		volumes = daemon.volumes.FilterByUsed(volumes, !danglingOnly)
-	}
-	for _, v := range volumes {
+	for _, v := range filterVolumes {
 		volumesOut = append(volumesOut, volumeToAPIType(v))
 	}
 	return volumesOut, warnings, nil
+}
+
+// filterVolumes filters volume list according to user specified filter
+// and returns user chosen volumes
+func (daemon *Daemon) filterVolumes(vols []volume.Volume, filter filters.Args) ([]volume.Volume, error) {
+	// if filter is empty, return original volume list
+	if filter.Len() == 0 {
+		return vols, nil
+	}
+
+	var retVols []volume.Volume
+	for _, vol := range vols {
+		if filter.Include("name") {
+			if !filter.Match("name", vol.Name()) {
+				continue
+			}
+		}
+		if filter.Include("driver") {
+			if !filter.Match("driver", vol.DriverName()) {
+				continue
+			}
+		}
+		retVols = append(retVols, vol)
+	}
+	danglingOnly := false
+	if filter.Include("dangling") {
+		if filter.ExactMatch("dangling", "true") || filter.ExactMatch("dangling", "1") {
+			danglingOnly = true
+		} else if !filter.ExactMatch("dangling", "false") && !filter.ExactMatch("dangling", "0") {
+			return nil, fmt.Errorf("Invalid filter 'dangling=%s'", filter.Get("dangling"))
+		}
+		retVols = daemon.volumes.FilterByUsed(retVols, !danglingOnly)
+	}
+	return retVols, nil
 }
 
 func populateImageFilterByParents(ancestorMap map[image.ID]bool, imageID image.ID, getChildren func(image.ID) []image.ID) {

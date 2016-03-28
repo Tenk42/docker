@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/backend"
+	"github.com/docker/docker/builder/dockerfile"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
@@ -14,7 +16,6 @@ import (
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/ioutils"
 	"github.com/docker/docker/reference"
-	"github.com/docker/engine-api/types"
 	containertypes "github.com/docker/engine-api/types/container"
 	"github.com/docker/go-connections/nat"
 )
@@ -70,8 +71,8 @@ func merge(userConf, imageConf *containertypes.Config) error {
 		userConf.Labels = imageConf.Labels
 	}
 
-	if userConf.Entrypoint.Len() == 0 {
-		if userConf.Cmd.Len() == 0 {
+	if len(userConf.Entrypoint) == 0 {
+		if len(userConf.Cmd) == 0 {
 			userConf.Cmd = imageConf.Cmd
 		}
 
@@ -98,7 +99,7 @@ func merge(userConf, imageConf *containertypes.Config) error {
 
 // Commit creates a new filesystem image from the current state of a container.
 // The image can optionally be tagged into a repository.
-func (daemon *Daemon) Commit(name string, c *types.ContainerCommitConfig) (string, error) {
+func (daemon *Daemon) Commit(name string, c *backend.ContainerCommitConfig) (string, error) {
 	container, err := daemon.GetContainer(name)
 	if err != nil {
 		return "", err
@@ -114,8 +115,13 @@ func (daemon *Daemon) Commit(name string, c *types.ContainerCommitConfig) (strin
 		defer daemon.containerUnpause(container)
 	}
 
+	newConfig, err := dockerfile.BuildFromConfig(c.Config, c.Changes)
+	if err != nil {
+		return "", err
+	}
+
 	if c.MergeConfigs {
-		if err := merge(c.Config, container.Config); err != nil {
+		if err := merge(newConfig, container.Config); err != nil {
 			return "", err
 		}
 	}
@@ -151,7 +157,7 @@ func (daemon *Daemon) Commit(name string, c *types.ContainerCommitConfig) (strin
 	h := image.History{
 		Author:     c.Author,
 		Created:    time.Now().UTC(),
-		CreatedBy:  strings.Join(container.Config.Cmd.Slice(), " "),
+		CreatedBy:  strings.Join(container.Config.Cmd, " "),
 		Comment:    c.Comment,
 		EmptyLayer: true,
 	}
@@ -166,7 +172,7 @@ func (daemon *Daemon) Commit(name string, c *types.ContainerCommitConfig) (strin
 	config, err := json.Marshal(&image.Image{
 		V1Image: image.V1Image{
 			DockerVersion:   dockerversion.Version,
-			Config:          c.Config,
+			Config:          newConfig,
 			Architecture:    runtime.GOARCH,
 			OS:              runtime.GOOS,
 			Container:       container.ID,
@@ -222,6 +228,7 @@ func (daemon *Daemon) exportContainerRw(container *container.Container) (archive
 
 	archive, err := container.RWLayer.TarStream()
 	if err != nil {
+		daemon.Unmount(container) // logging is already handled in the `Unmount` function
 		return nil, err
 	}
 	return ioutils.NewReadCloserWrapper(archive, func() error {

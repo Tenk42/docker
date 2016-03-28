@@ -950,6 +950,29 @@ If you then run `docker stop test`, the container will not exit cleanly - the
     user	0m 0.04s
     sys	0m 0.03s
 
+### Understand how CMD and ENTRYPOINT interact
+
+Both `CMD` and `ENTRYPOINT` instructions define what command gets executed when running a container.
+There are few rules that describe their co-operation.
+
+1. Dockerfile should specify at least one of `CMD` or `ENTRYPOINT` commands.
+
+2. `ENTRYPOINT` should be defined when using the container as an executable.
+
+3. `CMD` should be used as a way of defining default arguments for an `ENTRYPOINT` command
+or for executing an ad-hoc command in a container.
+
+4. `CMD` will be overridden when running the container with alternative arguments.
+
+The table below shows what command is executed for different `ENTRYPOINT` / `CMD` combinations:
+
+|                                | No ENTRYPOINT              | ENTRYPOINT exec_entry p1_entry                            | ENTRYPOINT ["exec_entry", "p1_entry"]          |
+|--------------------------------|----------------------------|-----------------------------------------------------------|------------------------------------------------|
+| **No CMD**                     | *error, not allowed*       | /bin/sh -c exec_entry p1_entry                            | exec_entry p1_entry                            |
+| **CMD ["exec_cmd", "p1_cmd"]** | exec_cmd p1_cmd            | /bin/sh -c exec_entry p1_entry exec_cmd p1_cmd            | exec_entry p1_entry exec_cmd p1_cmd            |
+| **CMD ["p1_cmd", "p2_cmd"]**   | p1_cmd p2_cmd              | /bin/sh -c exec_entry p1_entry p1_cmd p2_cmd              | exec_entry p1_entry p1_cmd p2_cmd              |
+| **CMD exec_cmd p1_cmd**        | /bin/sh -c exec_cmd p1_cmd | /bin/sh -c exec_entry p1_entry /bin/sh -c exec_cmd p1_cmd | exec_entry p1_entry /bin/sh -c exec_cmd p1_cmd |
+
 ## VOLUME
 
     VOLUME ["/data"]
@@ -998,6 +1021,8 @@ and for any `RUN`, `CMD` and `ENTRYPOINT` instructions that follow it in the
 
 The `WORKDIR` instruction sets the working directory for any `RUN`, `CMD`,
 `ENTRYPOINT`, `COPY` and `ADD` instructions that follow it in the `Dockerfile`.
+If the `WORKDIR` doesn't exist, it will be created even if its not used in any
+subsequent `Dockerfile` instruction.
 
 It can be used multiple times in the one `Dockerfile`. If a relative path
 is provided, it will be relative to the path of the previous `WORKDIR`

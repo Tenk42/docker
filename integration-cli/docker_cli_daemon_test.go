@@ -72,7 +72,7 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithVolumesRefs(c *check.C) {
 		c.Fatal(err)
 	}
 
-	if out, err := s.d.Cmd("run", "-d", "--name", "volrestarttest1", "-v", "/foo", "busybox"); err != nil {
+	if out, err := s.d.Cmd("run", "--name", "volrestarttest1", "-v", "/foo", "busybox"); err != nil {
 		c.Fatal(err, out)
 	}
 
@@ -430,69 +430,6 @@ func (s *DockerDaemonSuite) TestDaemonIPv6FixedCIDRAndMac(c *check.C) {
 
 func (s *DockerDaemonSuite) TestDaemonLogLevelWrong(c *check.C) {
 	c.Assert(s.d.Start("--log-level=bogus"), check.NotNil, check.Commentf("Daemon shouldn't start with wrong log level"))
-}
-
-func (s *DockerSuite) TestDaemonStartWithDaemonCommand(c *check.C) {
-
-	type kind int
-
-	const (
-		common kind = iota
-		daemon
-	)
-
-	var flags = []map[kind][]string{
-		{common: {"-l", "info"}, daemon: {"--selinux-enabled"}},
-		{common: {"-D"}, daemon: {"--selinux-enabled", "-r"}},
-		{common: {"-D"}, daemon: {"--restart"}},
-		{common: {"--debug"}, daemon: {"--log-driver=json-file", "--log-opt=max-size=1k"}},
-	}
-
-	var invalidGlobalFlags = [][]string{
-		//Invalid because you cannot pass daemon flags as global flags.
-		{"--selinux-enabled", "-l", "info"},
-		{"-D", "-r"},
-		{"--config", "/tmp"},
-	}
-
-	// `docker daemon -l info --selinux-enabled`
-	// should NOT error out
-	for _, f := range flags {
-		d := NewDaemon(c)
-		args := append(f[common], f[daemon]...)
-		if err := d.Start(args...); err != nil {
-			c.Fatalf("Daemon should have started successfully with %v: %v", args, err)
-		}
-		d.Stop()
-	}
-
-	// `docker -l info daemon --selinux-enabled`
-	// should error out
-	for _, f := range flags {
-		d := NewDaemon(c)
-		d.GlobalFlags = f[common]
-		if err := d.Start(f[daemon]...); err == nil {
-			d.Stop()
-			c.Fatalf("Daemon should have failed to start with docker %v daemon %v", d.GlobalFlags, f[daemon])
-		}
-	}
-
-	for _, f := range invalidGlobalFlags {
-		cmd := exec.Command(dockerBinary, append(f, "daemon")...)
-		errch := make(chan error)
-		var err error
-		go func() {
-			errch <- cmd.Run()
-		}()
-		select {
-		case <-time.After(time.Second):
-			cmd.Process.Kill()
-		case err = <-errch:
-		}
-		if err == nil {
-			c.Fatalf("Daemon should have failed to start with docker %v daemon", f)
-		}
-	}
 }
 
 func (s *DockerDaemonSuite) TestDaemonLogLevelDebug(c *check.C) {
@@ -972,6 +909,7 @@ func (s *DockerDaemonSuite) TestDaemonIP(c *check.C) {
 }
 
 func (s *DockerDaemonSuite) TestDaemonICCPing(c *check.C) {
+	testRequires(c, bridgeNfIptables)
 	d := s.d
 
 	bridgeName := "external-bridge"
@@ -1156,15 +1094,11 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverDefault(c *check.C) {
 		c.Fatal(err)
 	}
 
-	out, err := s.d.Cmd("run", "-d", "busybox", "echo", "testline")
-	if err != nil {
-		c.Fatal(out, err)
-	}
-	id := strings.TrimSpace(out)
+	out, err := s.d.Cmd("run", "--name=test", "busybox", "echo", "testline")
+	c.Assert(err, check.IsNil, check.Commentf(out))
+	id, err := s.d.getIDByName("test")
+	c.Assert(err, check.IsNil)
 
-	if out, err := s.d.Cmd("wait", id); err != nil {
-		c.Fatal(out, err)
-	}
 	logPath := filepath.Join(s.d.root, "containers", id, id+"-json.log")
 
 	if _, err := os.Stat(logPath); err != nil {
@@ -1198,15 +1132,13 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverDefaultOverride(c *check.C) {
 		c.Fatal(err)
 	}
 
-	out, err := s.d.Cmd("run", "-d", "--log-driver=none", "busybox", "echo", "testline")
+	out, err := s.d.Cmd("run", "--name=test", "--log-driver=none", "busybox", "echo", "testline")
 	if err != nil {
 		c.Fatal(out, err)
 	}
-	id := strings.TrimSpace(out)
+	id, err := s.d.getIDByName("test")
+	c.Assert(err, check.IsNil)
 
-	if out, err := s.d.Cmd("wait", id); err != nil {
-		c.Fatal(out, err)
-	}
 	logPath := filepath.Join(s.d.root, "containers", id, id+"-json.log")
 
 	if _, err := os.Stat(logPath); err == nil || !os.IsNotExist(err) {
@@ -1219,14 +1151,12 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverNone(c *check.C) {
 		c.Fatal(err)
 	}
 
-	out, err := s.d.Cmd("run", "-d", "busybox", "echo", "testline")
+	out, err := s.d.Cmd("run", "--name=test", "busybox", "echo", "testline")
 	if err != nil {
 		c.Fatal(out, err)
 	}
-	id := strings.TrimSpace(out)
-	if out, err := s.d.Cmd("wait", id); err != nil {
-		c.Fatal(out, err)
-	}
+	id, err := s.d.getIDByName("test")
+	c.Assert(err, check.IsNil)
 
 	logPath := filepath.Join(s.d.folder, "graph", "containers", id, id+"-json.log")
 
@@ -1240,15 +1170,13 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverNoneOverride(c *check.C) {
 		c.Fatal(err)
 	}
 
-	out, err := s.d.Cmd("run", "-d", "--log-driver=json-file", "busybox", "echo", "testline")
+	out, err := s.d.Cmd("run", "--name=test", "--log-driver=json-file", "busybox", "echo", "testline")
 	if err != nil {
 		c.Fatal(out, err)
 	}
-	id := strings.TrimSpace(out)
+	id, err := s.d.getIDByName("test")
+	c.Assert(err, check.IsNil)
 
-	if out, err := s.d.Cmd("wait", id); err != nil {
-		c.Fatal(out, err)
-	}
 	logPath := filepath.Join(s.d.root, "containers", id, id+"-json.log")
 
 	if _, err := os.Stat(logPath); err != nil {
@@ -1278,22 +1206,15 @@ func (s *DockerDaemonSuite) TestDaemonLoggingDriverNoneOverride(c *check.C) {
 }
 
 func (s *DockerDaemonSuite) TestDaemonLoggingDriverNoneLogsError(c *check.C) {
-	if err := s.d.StartWithBusybox("--log-driver=none"); err != nil {
-		c.Fatal(err)
-	}
+	c.Assert(s.d.StartWithBusybox("--log-driver=none"), checker.IsNil)
 
-	out, err := s.d.Cmd("run", "-d", "busybox", "echo", "testline")
-	if err != nil {
-		c.Fatal(out, err)
-	}
-	id := strings.TrimSpace(out)
-	out, err = s.d.Cmd("logs", id)
-	if err == nil {
-		c.Fatalf("Logs should fail with 'none' driver")
-	}
-	if !strings.Contains(out, `"logs" command is supported only for "json-file" and "journald" logging drivers (got: none)`) {
-		c.Fatalf("There should be an error about none not being a recognized log driver, got: %s", out)
-	}
+	out, err := s.d.Cmd("run", "--name=test", "busybox", "echo", "testline")
+	c.Assert(err, checker.IsNil, check.Commentf(out))
+
+	out, err = s.d.Cmd("logs", "test")
+	c.Assert(err, check.NotNil, check.Commentf("Logs should fail with 'none' driver"))
+	expected := `"logs" command is supported only for "json-file" and "journald" logging drivers (got: none)`
+	c.Assert(out, checker.Contains, expected)
 }
 
 func (s *DockerDaemonSuite) TestDaemonDots(c *check.C) {
@@ -1575,7 +1496,7 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithSocketAsVolume(c *check.C) {
 
 	socket := filepath.Join(s.d.folder, "docker.sock")
 
-	out, err := s.d.Cmd("run", "-d", "--restart=always", "-v", socket+":/sock", "busybox")
+	out, err := s.d.Cmd("run", "--restart=always", "-v", socket+":/sock", "busybox")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
 	c.Assert(s.d.Restart(), check.IsNil)
 }
@@ -1586,7 +1507,18 @@ func (s *DockerDaemonSuite) TestCleanupMountsAfterCrash(c *check.C) {
 	out, err := s.d.Cmd("run", "-d", "busybox", "top")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
 	id := strings.TrimSpace(out)
-	c.Assert(s.d.cmd.Process.Signal(os.Kill), check.IsNil)
+	c.Assert(s.d.Kill(), check.IsNil)
+
+	// kill the container
+	runCmd := exec.Command(ctrBinary, "--address", "/var/run/docker/libcontainerd/docker-containerd.sock", "containers", "kill", id)
+	if out, ec, err := runCommandWithOutput(runCmd); err != nil {
+		c.Fatalf("Failed to run ctr, ExitCode: %d, err: '%v' output: '%s' cid: '%s'\n", ec, err, out, id)
+	}
+
+	// Give time to containerd to process the command if we don't
+	// the exit event might be received after we do the inspect
+	time.Sleep(3 * time.Second)
+
 	c.Assert(s.d.Start(), check.IsNil)
 	mountOut, err := ioutil.ReadFile("/proc/self/mountinfo")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
@@ -1919,6 +1851,7 @@ func (s *DockerDaemonSuite) TestDaemonNoSpaceleftOnDeviceError(c *check.C) {
 // Test daemon restart with container links + auto restart
 func (s *DockerDaemonSuite) TestDaemonRestartContainerLinksRestart(c *check.C) {
 	d := NewDaemon(c)
+	defer d.Stop()
 	err := d.StartWithBusybox()
 	c.Assert(err, checker.IsNil)
 
@@ -2186,7 +2119,9 @@ func (s *DockerSuite) TestDaemonDiscoveryBackendConfigReload(c *check.C) {
 
 	configFile, err = os.Create(configFilePath)
 	c.Assert(err, checker.IsNil)
+	defer os.Remove(configFilePath)
 	fmt.Fprintf(configFile, "%s", daemonConfig)
+	configFile.Close()
 
 	syscall.Kill(d.cmd.Process.Pid, syscall.SIGHUP)
 

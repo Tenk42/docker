@@ -824,6 +824,63 @@ RUN [ $(ls -l /exists/exists_file | awk '{print $3":"$4}') = 'dockerio:dockerio'
 	}
 }
 
+// This test is mainly for user namespaces to verify that new directories
+// are created as the remapped root uid/gid pair
+func (s *DockerSuite) TestBuildAddToNewDestination(c *check.C) {
+	testRequires(c, DaemonIsLinux) // Linux specific test
+	name := "testaddtonewdest"
+	ctx, err := fakeContext(`FROM busybox
+ADD . /new_dir
+RUN ls -l /
+RUN [ $(ls -l / | grep new_dir | awk '{print $3":"$4}') = 'root:root' ]`,
+		map[string]string{
+			"test_dir/test_file": "test file",
+		})
+	if err != nil {
+		c.Fatal(err)
+	}
+	defer ctx.Close()
+
+	if _, err := buildImageFromContext(name, ctx, true); err != nil {
+		c.Fatal(err)
+	}
+}
+
+// This test is mainly for user namespaces to verify that new directories
+// are created as the remapped root uid/gid pair
+func (s *DockerSuite) TestBuildCopyToNewParentDirectory(c *check.C) {
+	testRequires(c, DaemonIsLinux) // Linux specific test
+	name := "testcopytonewdir"
+	ctx, err := fakeContext(`FROM busybox
+COPY test_dir /new_dir
+RUN ls -l /new_dir
+RUN [ $(ls -l / | grep new_dir | awk '{print $3":"$4}') = 'root:root' ]`,
+		map[string]string{
+			"test_dir/test_file": "test file",
+		})
+	if err != nil {
+		c.Fatal(err)
+	}
+	defer ctx.Close()
+
+	if _, err := buildImageFromContext(name, ctx, true); err != nil {
+		c.Fatal(err)
+	}
+}
+
+// This test is mainly for user namespaces to verify that new directories
+// are created as the remapped root uid/gid pair
+func (s *DockerSuite) TestBuildWorkdirIsContainerRoot(c *check.C) {
+	testRequires(c, DaemonIsLinux) // Linux specific test
+	name := "testworkdirownership"
+	if _, err := buildImage(name, `FROM busybox
+WORKDIR /new_dir
+RUN ls -l /
+RUN [ $(ls -l / | grep new_dir | awk '{print $3":"$4}') = 'root:root' ]`, true); err != nil {
+		c.Fatal(err)
+	}
+}
+
 func (s *DockerSuite) TestBuildAddMultipleFilesToFile(c *check.C) {
 	name := "testaddmultiplefilestofile"
 
@@ -2230,7 +2287,7 @@ func (s *DockerSuite) TestBuildContextCleanupFailedBuild(c *check.C) {
 func (s *DockerSuite) TestBuildCmd(c *check.C) {
 	name := "testbuildcmd"
 
-	expected := "{[/bin/echo Hello World]}"
+	expected := "[/bin/echo Hello World]"
 	_, err := buildImage(name,
 		`FROM `+minimalBaseImage()+`
         CMD ["/bin/echo", "Hello World"]`,
@@ -2362,7 +2419,7 @@ func (s *DockerSuite) TestBuildEmptyEntrypointInheritance(c *check.C) {
 	}
 	res := inspectField(c, name, "Config.Entrypoint")
 
-	expected := "{[/bin/echo]}"
+	expected := "[/bin/echo]"
 	if res != expected {
 		c.Fatalf("Entrypoint %s, expected %s", res, expected)
 	}
@@ -2376,7 +2433,7 @@ func (s *DockerSuite) TestBuildEmptyEntrypointInheritance(c *check.C) {
 	}
 	res = inspectField(c, name2, "Config.Entrypoint")
 
-	expected = "{[]}"
+	expected = "[]"
 
 	if res != expected {
 		c.Fatalf("Entrypoint %s, expected %s", res, expected)
@@ -2386,7 +2443,7 @@ func (s *DockerSuite) TestBuildEmptyEntrypointInheritance(c *check.C) {
 
 func (s *DockerSuite) TestBuildEmptyEntrypoint(c *check.C) {
 	name := "testbuildentrypoint"
-	expected := "{[]}"
+	expected := "[]"
 
 	_, err := buildImage(name,
 		`FROM busybox
@@ -2405,7 +2462,7 @@ func (s *DockerSuite) TestBuildEmptyEntrypoint(c *check.C) {
 func (s *DockerSuite) TestBuildEntrypoint(c *check.C) {
 	name := "testbuildentrypoint"
 
-	expected := "{[/bin/echo]}"
+	expected := "[/bin/echo]"
 	_, err := buildImage(name,
 		`FROM `+minimalBaseImage()+`
         ENTRYPOINT ["/bin/echo"]`,
@@ -3087,7 +3144,7 @@ func (s *DockerSuite) TestBuildEntrypointRunCleanup(c *check.C) {
 	}
 	res := inspectField(c, name, "Config.Cmd")
 	// Cmd must be cleaned up
-	if res != "<nil>" {
+	if res != "[]" {
 		c.Fatalf("Cmd %s, expected nil", res)
 	}
 }
@@ -3164,7 +3221,7 @@ func (s *DockerSuite) TestBuildInheritance(c *check.C) {
 	}
 
 	res := inspectField(c, name, "Config.Entrypoint")
-	if expected := "{[/bin/echo]}"; res != expected {
+	if expected := "[/bin/echo]"; res != expected {
 		c.Fatalf("Entrypoint %s, expected %s", res, expected)
 	}
 	ports2 := inspectField(c, name, "Config.ExposedPorts")
@@ -3674,30 +3731,25 @@ func (s *DockerSuite) TestBuildDockerignoringWildDirs(c *check.C) {
         FROM busybox
 		COPY . /
 		#RUN sh -c "[[ -e /.dockerignore ]]"
-		RUN sh -c "[[ -e /Dockerfile ]]"
-
-		RUN sh -c "[[ ! -e /file0 ]]"
-		RUN sh -c "[[ ! -e /dir1/file0 ]]"
-		RUN sh -c "[[ ! -e /dir2/file0 ]]"
-
-		RUN sh -c "[[ ! -e /file1 ]]"
-		RUN sh -c "[[ ! -e /dir1/file1 ]]"
-		RUN sh -c "[[ ! -e /dir1/dir2/file1 ]]"
-
-		RUN sh -c "[[ ! -e /dir1/file2 ]]"
-		RUN sh -c "[[   -e /dir1/dir2/file2 ]]"
-
-		RUN sh -c "[[ ! -e /dir1/dir2/file4 ]]"
-		RUN sh -c "[[ ! -e /dir1/dir2/file5 ]]"
-		RUN sh -c "[[ ! -e /dir1/dir2/file6 ]]"
-		RUN sh -c "[[ ! -e /dir1/dir3/file7 ]]"
-		RUN sh -c "[[ ! -e /dir1/dir3/file8 ]]"
-		RUN sh -c "[[   -e /dir1/dir3 ]]"
-		RUN sh -c "[[   -e /dir1/dir4 ]]"
-
-		RUN sh -c "[[ ! -e 'dir1/dir5/fileAA' ]]"
-		RUN sh -c "[[   -e 'dir1/dir5/fileAB' ]]"
-		RUN sh -c "[[   -e 'dir1/dir5/fileB' ]]"   # "." in pattern means nothing
+		RUN sh -c "[[ -e /Dockerfile ]]           && \
+		           [[ ! -e /file0 ]]              && \
+		           [[ ! -e /dir1/file0 ]]         && \
+		           [[ ! -e /dir2/file0 ]]         && \
+		           [[ ! -e /file1 ]]              && \
+		           [[ ! -e /dir1/file1 ]]         && \
+		           [[ ! -e /dir1/dir2/file1 ]]    && \
+		           [[ ! -e /dir1/file2 ]]         && \
+		           [[   -e /dir1/dir2/file2 ]]    && \
+		           [[ ! -e /dir1/dir2/file4 ]]    && \
+		           [[ ! -e /dir1/dir2/file5 ]]    && \
+		           [[ ! -e /dir1/dir2/file6 ]]    && \
+		           [[ ! -e /dir1/dir3/file7 ]]    && \
+		           [[ ! -e /dir1/dir3/file8 ]]    && \
+		           [[   -e /dir1/dir3 ]]          && \
+		           [[   -e /dir1/dir4 ]]          && \
+		           [[ ! -e 'dir1/dir5/fileAA' ]]  && \
+		           [[   -e 'dir1/dir5/fileAB' ]]  && \
+		           [[   -e 'dir1/dir5/fileB' ]]"   # "." in pattern means nothing
 
 		RUN echo all done!`
 
@@ -3811,21 +3863,18 @@ USER root
 RUN [ "$(id -G):$(id -Gn)" = '0 10:root wheel' ]
 
 # Setup dockerio user and group
-RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd
-RUN echo 'dockerio:x:1001:' >> /etc/group
+RUN echo 'dockerio:x:1001:1001::/bin:/bin/false' >> /etc/passwd && \
+	echo 'dockerio:x:1001:' >> /etc/group
 
 # Make sure we can switch to our user and all the information is exactly as we expect it to be
 USER dockerio
-RUN id -G
-RUN id -Gn
 RUN [ "$(id -u):$(id -g)/$(id -un):$(id -gn)/$(id -G):$(id -Gn)" = '1001:1001/dockerio:dockerio/1001:dockerio' ]
 
 # Switch back to root and double check that worked exactly as we might expect it to
 USER root
-RUN [ "$(id -u):$(id -g)/$(id -un):$(id -gn)/$(id -G):$(id -Gn)" = '0:0/root:root/0 10:root wheel' ]
-
-# Add a "supplementary" group for our dockerio user
-RUN echo 'supplementary:x:1002:dockerio' >> /etc/group
+RUN [ "$(id -u):$(id -g)/$(id -un):$(id -gn)/$(id -G):$(id -Gn)" = '0:0/root:root/0 10:root wheel' ] && \
+	# Add a "supplementary" group for our dockerio user \
+	echo 'supplementary:x:1002:dockerio' >> /etc/group
 
 # ... and then go verify that we get it like we expect
 USER dockerio
@@ -4367,12 +4416,12 @@ func (s *DockerSuite) TestBuildCleanupCmdOnEntrypoint(c *check.C) {
 		c.Fatal(err)
 	}
 	res := inspectField(c, name, "Config.Cmd")
-	if res != "<nil>" {
+	if res != "[]" {
 		c.Fatalf("Cmd %s, expected nil", res)
 	}
 
 	res = inspectField(c, name, "Config.Entrypoint")
-	if expected := "{[cat]}"; res != expected {
+	if expected := "[cat]"; res != expected {
 		c.Fatalf("Entrypoint %s, expected %s", res, expected)
 	}
 }
@@ -4840,7 +4889,7 @@ func (s *DockerSuite) TestBuildNotVerboseFailure(c *check.C) {
 			c.Fatal(fmt.Errorf("Test [%s] expected to fail but didn't", te.TestName))
 		}
 		if qstderr != vstdout+vstderr {
-			c.Fatal(fmt.Errorf("Test[%s] expected that quiet stderr and verbose stdout are equal; quiet [%v], verbose [%v]", te.TestName, qstderr, vstdout))
+			c.Fatal(fmt.Errorf("Test[%s] expected that quiet stderr and verbose stdout are equal; quiet [%v], verbose [%v]", te.TestName, qstderr, vstdout+vstderr))
 		}
 	}
 }
@@ -5750,6 +5799,83 @@ func (s *DockerTrustSuite) TestBuildContextDirIsSymlink(c *check.C) {
 	}
 }
 
+func (s *DockerTrustSuite) TestTrustedBuildTagFromReleasesRole(c *check.C) {
+	testRequires(c, NotaryHosting)
+
+	latestTag := s.setupTrustedImage(c, "trusted-build-releases-role")
+	repoName := strings.TrimSuffix(latestTag, ":latest")
+
+	// Now create the releases role
+	s.notaryCreateDelegation(c, repoName, "targets/releases", s.not.keys[0].Public)
+	s.notaryImportKey(c, repoName, "targets/releases", s.not.keys[0].Private)
+	s.notaryPublish(c, repoName)
+
+	// push a different tag to the releases role
+	otherTag := fmt.Sprintf("%s:other", repoName)
+	dockerCmd(c, "tag", "busybox", otherTag)
+
+	pushCmd := exec.Command(dockerBinary, "push", otherTag)
+	s.trustedCmd(pushCmd)
+	out, _, err := runCommandWithOutput(pushCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted push failed: %s", out))
+	s.assertTargetInRoles(c, repoName, "other", "targets/releases")
+	s.assertTargetNotInRoles(c, repoName, "other", "targets")
+
+	out, status := dockerCmd(c, "rmi", otherTag)
+	c.Assert(status, check.Equals, 0, check.Commentf("docker rmi failed: %s", out))
+
+	dockerFile := fmt.Sprintf(`
+  FROM %s
+  RUN []
+    `, otherTag)
+
+	name := "testtrustedbuildreleasesrole"
+
+	buildCmd := buildImageCmd(name, dockerFile, true)
+	s.trustedCmd(buildCmd)
+	out, _, err = runCommandWithOutput(buildCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted build failed: %s", out))
+	c.Assert(out, checker.Contains, fmt.Sprintf("FROM %s@sha", repoName))
+}
+
+func (s *DockerTrustSuite) TestTrustedBuildTagIgnoresOtherDelegationRoles(c *check.C) {
+	testRequires(c, NotaryHosting)
+
+	latestTag := s.setupTrustedImage(c, "trusted-build-releases-role")
+	repoName := strings.TrimSuffix(latestTag, ":latest")
+
+	// Now create a non-releases delegation role
+	s.notaryCreateDelegation(c, repoName, "targets/other", s.not.keys[0].Public)
+	s.notaryImportKey(c, repoName, "targets/other", s.not.keys[0].Private)
+	s.notaryPublish(c, repoName)
+
+	// push a different tag to the other role
+	otherTag := fmt.Sprintf("%s:other", repoName)
+	dockerCmd(c, "tag", "busybox", otherTag)
+
+	pushCmd := exec.Command(dockerBinary, "push", otherTag)
+	s.trustedCmd(pushCmd)
+	out, _, err := runCommandWithOutput(pushCmd)
+	c.Assert(err, check.IsNil, check.Commentf("Trusted push failed: %s", out))
+	s.assertTargetInRoles(c, repoName, "other", "targets/other")
+	s.assertTargetNotInRoles(c, repoName, "other", "targets")
+
+	out, status := dockerCmd(c, "rmi", otherTag)
+	c.Assert(status, check.Equals, 0, check.Commentf("docker rmi failed: %s", out))
+
+	dockerFile := fmt.Sprintf(`
+  FROM %s
+  RUN []
+    `, otherTag)
+
+	name := "testtrustedbuildotherrole"
+
+	buildCmd := buildImageCmd(name, dockerFile, true)
+	s.trustedCmd(buildCmd)
+	out, _, err = runCommandWithOutput(buildCmd)
+	c.Assert(err, check.NotNil, check.Commentf("Trusted build expected to fail: %s", out))
+}
+
 // Issue #15634: COPY fails when path starts with "null"
 func (s *DockerSuite) TestBuildNullStringInAddCopyVolume(c *check.C) {
 	name := "testbuildnullstringinaddcopyvolume"
@@ -6547,8 +6673,136 @@ func (s *DockerSuite) TestBuildWorkdirWindowsPath(c *check.C) {
 	}
 }
 
-func (s *DockerRegistryAuthSuite) TestBuildFromAuthenticatedRegistry(c *check.C) {
-	dockerCmd(c, "login", "-u", s.reg.username, "-p", s.reg.password, "-e", s.reg.email, privateRegistryURL)
+func (s *DockerSuite) TestBuildLabel(c *check.C) {
+	name := "testbuildlabel"
+	testLabel := "foo"
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, false, []string{"--label", testLabel}...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	if _, ok := labels[testLabel]; !ok {
+		c.Fatal("label not found in image")
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelCacheCommit(c *check.C) {
+	name := "testbuildlabelcachecommit"
+	testLabel := "foo"
+
+	if _, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+  `, false); err != nil {
+		c.Fatal(err)
+	}
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, true, []string{"--label", testLabel}...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	if _, ok := labels[testLabel]; !ok {
+		c.Fatal("label not found in image")
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelMultiple(c *check.C) {
+	name := "testbuildlabelmultiple"
+	testLabels := map[string]string{
+		"foo": "bar",
+		"123": "456",
+	}
+
+	labelArgs := []string{}
+
+	for k, v := range testLabels {
+		labelArgs = append(labelArgs, "--label", k+"="+v)
+	}
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL default foo
+`, false, labelArgs...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	for k, v := range testLabels {
+		if x, ok := labels[k]; !ok || x != v {
+			c.Fatalf("label %s=%s not found in image", k, v)
+		}
+	}
+}
+
+func (s *DockerSuite) TestBuildLabelOverwrite(c *check.C) {
+	name := "testbuildlabeloverwrite"
+	testLabel := "foo"
+	testValue := "bar"
+
+	_, err := buildImage(name, `
+  FROM `+minimalBaseImage()+`
+  LABEL `+testLabel+`+ foo
+`, false, []string{"--label", testLabel + "=" + testValue}...)
+
+	if err != nil {
+		c.Fatal("error building image with labels", err)
+	}
+
+	res := inspectFieldJSON(c, name, "Config.Labels")
+
+	var labels map[string]string
+
+	if err := json.Unmarshal([]byte(res), &labels); err != nil {
+		c.Fatal(err)
+	}
+
+	v, ok := labels[testLabel]
+	if !ok {
+		c.Fatal("label not found in image")
+	}
+
+	if v != testValue {
+		c.Fatal("label not overwritten")
+	}
+}
+
+func (s *DockerRegistryAuthHtpasswdSuite) TestBuildFromAuthenticatedRegistry(c *check.C) {
+	dockerCmd(c, "login", "-u", s.reg.username, "-p", s.reg.password, privateRegistryURL)
 
 	baseImage := privateRegistryURL + "/baseimage"
 
@@ -6568,4 +6822,46 @@ func (s *DockerRegistryAuthSuite) TestBuildFromAuthenticatedRegistry(c *check.C)
 	`, baseImage), true)
 
 	c.Assert(err, checker.IsNil)
+}
+
+func (s *DockerRegistryAuthHtpasswdSuite) TestBuildWithExternalAuth(c *check.C) {
+	osPath := os.Getenv("PATH")
+	defer os.Setenv("PATH", osPath)
+
+	workingDir, err := os.Getwd()
+	c.Assert(err, checker.IsNil)
+	absolute, err := filepath.Abs(filepath.Join(workingDir, "fixtures", "auth"))
+	c.Assert(err, checker.IsNil)
+	testPath := fmt.Sprintf("%s%c%s", osPath, filepath.ListSeparator, absolute)
+
+	os.Setenv("PATH", testPath)
+
+	repoName := fmt.Sprintf("%v/dockercli/busybox:authtest", privateRegistryURL)
+
+	tmp, err := ioutil.TempDir("", "integration-cli-")
+	c.Assert(err, checker.IsNil)
+
+	externalAuthConfig := `{ "credsStore": "shell-test" }`
+
+	configPath := filepath.Join(tmp, "config.json")
+	err = ioutil.WriteFile(configPath, []byte(externalAuthConfig), 0644)
+	c.Assert(err, checker.IsNil)
+
+	dockerCmd(c, "--config", tmp, "login", "-u", s.reg.username, "-p", s.reg.password, privateRegistryURL)
+
+	b, err := ioutil.ReadFile(configPath)
+	c.Assert(err, checker.IsNil)
+	c.Assert(string(b), checker.Not(checker.Contains), "\"auth\":")
+
+	dockerCmd(c, "--config", tmp, "tag", "busybox", repoName)
+	dockerCmd(c, "--config", tmp, "push", repoName)
+
+	// make sure the image is pulled when building
+	dockerCmd(c, "rmi", repoName)
+
+	buildCmd := exec.Command(dockerBinary, "--config", tmp, "build", "-")
+	buildCmd.Stdin = strings.NewReader(fmt.Sprintf("FROM %s", repoName))
+
+	out, _, err := runCommandWithOutput(buildCmd)
+	c.Assert(err, check.IsNil, check.Commentf(out))
 }

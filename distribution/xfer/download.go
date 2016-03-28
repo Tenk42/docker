@@ -146,7 +146,11 @@ func (ldm *LayerDownloadManager) Download(ctx context.Context, initialRootFS ima
 	}
 
 	if topDownload == nil {
-		return rootFS, func() { layer.ReleaseAndLog(ldm.layerStore, topLayer) }, nil
+		return rootFS, func() {
+			if topLayer != nil {
+				layer.ReleaseAndLog(ldm.layerStore, topLayer)
+			}
+		}, nil
 	}
 
 	// Won't be using the list built up so far - will generate it
@@ -263,7 +267,7 @@ func (ldm *LayerDownloadManager) makeDownloadFunc(descriptor DownloadDescriptor,
 
 			selectLoop:
 				for {
-					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d seconds", delay)
+					progress.Updatef(progressOutput, descriptor.ID(), "Retrying in %d second%s", delay, (map[bool]string{true: "s"})[delay != 1])
 					select {
 					case <-ticker.C:
 						delay--

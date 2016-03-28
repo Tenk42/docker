@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/docker/distribution"
@@ -25,6 +24,13 @@ type dumbCredentialStore struct {
 
 func (dcs dumbCredentialStore) Basic(*url.URL) (string, string) {
 	return dcs.auth.Username, dcs.auth.Password
+}
+
+func (dcs dumbCredentialStore) RefreshToken(*url.URL, string) string {
+	return dcs.auth.IdentityToken
+}
+
+func (dcs dumbCredentialStore) SetRefreshToken(*url.URL, string, string) {
 }
 
 // NewV2Repository returns a repository (v2 only). It creates a HTTP transport
@@ -51,43 +57,21 @@ func NewV2Repository(ctx context.Context, repoInfo *registry.RepositoryInfo, end
 		DisableKeepAlives: true,
 	}
 
-	modifiers := registry.DockerHeaders(dockerversion.DockerUserAgent(), metaHeaders)
+	modifiers := registry.DockerHeaders(dockerversion.DockerUserAgent(ctx), metaHeaders)
 	authTransport := transport.NewTransport(base, modifiers...)
-	pingClient := &http.Client{
-		Transport: authTransport,
-		Timeout:   15 * time.Second,
-	}
-	endpointStr := strings.TrimRight(endpoint.URL, "/") + "/v2/"
-	req, err := http.NewRequest("GET", endpointStr, nil)
+
+	challengeManager, foundVersion, err := registry.PingV2Registry(endpoint, authTransport)
 	if err != nil {
-		return nil, false, err
-	}
-	resp, err := pingClient.Do(req)
-	if err != nil {
-		return nil, false, err
-	}
-	defer resp.Body.Close()
-
-	v2Version := auth.APIVersion{
-		Type:    "registry",
-		Version: "2.0",
-	}
-
-	versions := auth.APIVersions(resp, registry.DefaultRegistryVersionHeader)
-	for _, pingVersion := range versions {
-		if pingVersion == v2Version {
-			// The version header indicates we're definitely
-			// talking to a v2 registry. So don't allow future
-			// fallbacks to the v1 protocol.
-
-			foundVersion = true
-			break
+		transportOK := false
+		if responseErr, ok := err.(registry.PingResponseError); ok {
+			transportOK = true
+			err = responseErr.Err
 		}
-	}
-
-	challengeManager := auth.NewSimpleChallengeManager()
-	if err := challengeManager.AddResponse(resp); err != nil {
-		return nil, foundVersion, err
+		return nil, foundVersion, fallbackError{
+			err:         err,
+			confirmedV2: foundVersion,
+			transportOK: transportOK,
+		}
 	}
 
 	if authConfig.RegistryToken != "" {
@@ -95,7 +79,18 @@ func NewV2Repository(ctx context.Context, repoInfo *registry.RepositoryInfo, end
 		modifiers = append(modifiers, auth.NewAuthorizer(challengeManager, passThruTokenHandler))
 	} else {
 		creds := dumbCredentialStore{auth: authConfig}
-		tokenHandler := auth.NewTokenHandler(authTransport, creds, repoName, actions...)
+		tokenHandlerOptions := auth.TokenHandlerOptions{
+			Transport:   authTransport,
+			Credentials: creds,
+			Scopes: []auth.Scope{
+				auth.RepositoryScope{
+					Repository: repoName,
+					Actions:    actions,
+				},
+			},
+			ClientID: registry.AuthClientID,
+		}
+		tokenHandler := auth.NewTokenHandlerWithOptions(tokenHandlerOptions)
 		basicHandler := auth.NewBasicHandler(creds)
 		modifiers = append(modifiers, auth.NewAuthorizer(challengeManager, tokenHandler, basicHandler))
 	}
@@ -103,11 +98,22 @@ func NewV2Repository(ctx context.Context, repoInfo *registry.RepositoryInfo, end
 
 	repoNameRef, err := distreference.ParseNamed(repoName)
 	if err != nil {
-		return nil, foundVersion, err
+		return nil, foundVersion, fallbackError{
+			err:         err,
+			confirmedV2: foundVersion,
+			transportOK: true,
+		}
 	}
 
-	repo, err = client.NewRepository(ctx, repoNameRef, endpoint.URL, tr)
-	return repo, foundVersion, err
+	repo, err = client.NewRepository(ctx, repoNameRef, endpoint.URL.String(), tr)
+	if err != nil {
+		err = fallbackError{
+			err:         err,
+			confirmedV2: foundVersion,
+			transportOK: true,
+		}
+	}
+	return
 }
 
 type existingTokenHandler struct {

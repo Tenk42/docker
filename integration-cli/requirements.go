@@ -92,10 +92,20 @@ var (
 			// for now notary binary is built only if we're running inside
 			// container through `make test`. Figure that out by testing if
 			// notary-server binary is in PATH.
-			_, err := exec.LookPath(notaryBinary)
+			_, err := exec.LookPath(notaryServerBinary)
 			return err == nil
 		},
-		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryBinary),
+		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryServerBinary),
+	}
+	NotaryServerHosting = testRequirement{
+		func() bool {
+			// for now notary-server binary is built only if we're running inside
+			// container through `make test`. Figure that out by testing if
+			// notary-server binary is in PATH.
+			_, err := exec.LookPath(notaryServerBinary)
+			return err == nil
+		},
+		fmt.Sprintf("Test requires an environment that can host %s in the same host", notaryServerBinary),
 	}
 	NotOverlay = testRequirement{
 		func() bool {
@@ -139,6 +149,30 @@ var (
 			return true
 		},
 		"Test requires native Golang compiler instead of GCCGO",
+	}
+	UserNamespaceInKernel = testRequirement{
+		func() bool {
+			if _, err := os.Stat("/proc/self/uid_map"); os.IsNotExist(err) {
+				/*
+				 * This kernel-provided file only exists if user namespaces are
+				 * supported
+				 */
+				return false
+			}
+
+			// We need extra check on redhat based distributions
+			if f, err := os.Open("/sys/module/user_namespace/parameters/enable"); err == nil {
+				b := make([]byte, 1)
+				_, _ = f.Read(b)
+				if string(b) == "N" {
+					return false
+				}
+				return true
+			}
+
+			return true
+		},
+		"Kernel must have user namespaces configured and enabled.",
 	}
 	NotUserNamespace = testRequirement{
 		func() bool {

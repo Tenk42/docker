@@ -3,10 +3,11 @@ package image
 import (
 	"io"
 
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/reference"
 	"github.com/docker/engine-api/types"
-	"github.com/docker/engine-api/types/container"
 	"github.com/docker/engine-api/types/registry"
+	"golang.org/x/net/context"
 )
 
 // Backend is all the methods that need to be implemented
@@ -19,8 +20,7 @@ type Backend interface {
 }
 
 type containerBackend interface {
-	Commit(name string, config *types.ContainerCommitConfig) (imageID string, err error)
-	Exists(containerName string) bool
+	Commit(name string, config *backend.ContainerCommitConfig) (imageID string, err error)
 }
 
 type imageBackend interface {
@@ -33,12 +33,12 @@ type imageBackend interface {
 
 type importExportBackend interface {
 	LoadImage(inTar io.ReadCloser, outStream io.Writer, quiet bool) error
-	ImportImage(src string, newRef reference.Named, msg string, inConfig io.ReadCloser, outStream io.Writer, config *container.Config) error
+	ImportImage(src string, newRef reference.Named, msg string, inConfig io.ReadCloser, outStream io.Writer, changes []string) error
 	ExportImage(names []string, outStream io.Writer) error
 }
 
 type registryBackend interface {
-	PullImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
-	PushImage(ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
-	SearchRegistryForImages(term string, authConfig *types.AuthConfig, metaHeaders map[string][]string) (*registry.SearchResults, error)
+	PullImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
+	PushImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error
+	SearchRegistryForImages(ctx context.Context, term string, authConfig *types.AuthConfig, metaHeaders map[string][]string) (*registry.SearchResults, error)
 }

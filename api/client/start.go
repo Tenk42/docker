@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	"github.com/Sirupsen/logrus"
 	Cli "github.com/docker/docker/cli"
 	flag "github.com/docker/docker/pkg/mflag"
@@ -19,7 +21,7 @@ func (cli *DockerCli) forwardAllSignals(cid string) chan os.Signal {
 	signal.CatchAll(sigc)
 	go func() {
 		for s := range sigc {
-			if s == signal.SIGCHLD {
+			if s == signal.SIGCHLD || s == signal.SIGPIPE {
 				continue
 			}
 			var sig string
@@ -34,7 +36,7 @@ func (cli *DockerCli) forwardAllSignals(cid string) chan os.Signal {
 				continue
 			}
 
-			if err := cli.client.ContainerKill(cid, sig); err != nil {
+			if err := cli.client.ContainerKill(context.Background(), cid, sig); err != nil {
 				logrus.Debugf("Error sending signal: %s", err)
 			}
 		}
@@ -63,7 +65,7 @@ func (cli *DockerCli) CmdStart(args ...string) error {
 
 		// 2. Attach to the container.
 		containerID := cmd.Arg(0)
-		c, err := cli.client.ContainerInspect(containerID)
+		c, err := cli.client.ContainerInspect(context.Background(), containerID)
 		if err != nil {
 			return err
 		}
@@ -87,28 +89,25 @@ func (cli *DockerCli) CmdStart(args ...string) error {
 		}
 
 		var in io.ReadCloser
+
 		if options.Stdin {
 			in = cli.in
 		}
 
-		resp, err := cli.client.ContainerAttach(options)
+		resp, err := cli.client.ContainerAttach(context.Background(), options)
 		if err != nil {
 			return err
 		}
 		defer resp.Close()
-		if in != nil && c.Config.Tty {
-			if err := cli.setRawTerminal(); err != nil {
-				return err
-			}
-			defer cli.restoreTerminal(in)
-		}
-
+		ctx, cancelFun := context.WithCancel(context.Background())
 		cErr := promise.Go(func() error {
-			return cli.holdHijackedConnection(c.Config.Tty, in, cli.out, cli.err, resp)
+			return cli.holdHijackedConnection(ctx, c.Config.Tty, in, cli.out, cli.err, resp)
 		})
 
 		// 3. Start the container.
-		if err := cli.client.ContainerStart(containerID); err != nil {
+		if err := cli.client.ContainerStart(context.Background(), containerID); err != nil {
+			cancelFun()
+			<-cErr
 			return err
 		}
 
@@ -140,7 +139,7 @@ func (cli *DockerCli) CmdStart(args ...string) error {
 func (cli *DockerCli) startContainersWithoutAttachments(containerIDs []string) error {
 	var failedContainers []string
 	for _, containerID := range containerIDs {
-		if err := cli.client.ContainerStart(containerID); err != nil {
+		if err := cli.client.ContainerStart(context.Background(), containerID); err != nil {
 			fmt.Fprintf(cli.err, "%s\n", err)
 			failedContainers = append(failedContainers, containerID)
 		} else {

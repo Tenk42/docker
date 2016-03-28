@@ -51,7 +51,7 @@ complete -c docker -f -n '__fish_docker_no_subcommand' -s d -l daemon -d 'Enable
 complete -c docker -f -n '__fish_docker_no_subcommand' -l dns -d 'Force Docker to use specific DNS servers'
 complete -c docker -f -n '__fish_docker_no_subcommand' -l dns-opt -d 'Force Docker to use specific DNS options'
 complete -c docker -f -n '__fish_docker_no_subcommand' -l dns-search -d 'Force Docker to use specific DNS search domains'
-complete -c docker -f -n '__fish_docker_no_subcommand' -l exec-opt -d 'Set exec driver options'
+complete -c docker -f -n '__fish_docker_no_subcommand' -l exec-opt -d 'Set runtime execution options'
 complete -c docker -f -n '__fish_docker_no_subcommand' -l fixed-cidr -d 'IPv4 subnet for fixed IPs (e.g. 10.20.0.0/16)'
 complete -c docker -f -n '__fish_docker_no_subcommand' -l fixed-cidr-v6 -d 'IPv6 subnet for fixed IPs (e.g.: 2001:a02b/48)'
 complete -c docker -f -n '__fish_docker_no_subcommand' -s G -l group -d 'Group to assign the unix socket specified by -H when running in daemon mode'
@@ -221,8 +221,7 @@ complete -c docker -A -f -n '__fish_seen_subcommand_from load' -l help -d 'Print
 complete -c docker -A -f -n '__fish_seen_subcommand_from load' -s i -l input -d 'Read from a tar archive file, instead of STDIN'
 
 # login
-complete -c docker -f -n '__fish_docker_no_subcommand' -a login -d 'Register or log in to a Docker registry server'
-complete -c docker -A -f -n '__fish_seen_subcommand_from login' -s e -l email -d 'Email'
+complete -c docker -f -n '__fish_docker_no_subcommand' -a login -d 'Log in to a Docker registry server'
 complete -c docker -A -f -n '__fish_seen_subcommand_from login' -l help -d 'Print usage'
 complete -c docker -A -f -n '__fish_seen_subcommand_from login' -s p -l password -d 'Password'
 complete -c docker -A -f -n '__fish_seen_subcommand_from login' -s u -l username -d 'Username'
@@ -399,5 +398,3 @@ complete -c docker -f -n '__fish_docker_no_subcommand' -a version -d 'Show the D
 complete -c docker -f -n '__fish_docker_no_subcommand' -a wait -d 'Block until a container stops, then print its exit code'
 complete -c docker -A -f -n '__fish_seen_subcommand_from wait' -l help -d 'Print usage'
 complete -c docker -A -f -n '__fish_seen_subcommand_from wait' -a '(__fish_print_docker_containers running)' -d "Container"
-
-

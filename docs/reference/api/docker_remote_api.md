@@ -26,23 +26,24 @@ group.
 
 To connect to the Docker daemon with cURL you need to use cURL 7.40 or
 later, as these versions have the `--unix-socket` flag available. To
-run `curl` against the deamon on the default socket, use the
+run `curl` against the daemon on the default socket, use the
 following:
 
-    curl --unix-socket /var/run/docker.sock http://containers/json
+    curl --unix-socket /var/run/docker.sock http:/containers/json
 
 If you have bound the Docker daemon to a different socket path or TCP
 port, you would reference that in your cURL rather than the
 default.
 
-The current version of the API is v1.23 which means calling `/info` is the same
-as calling `/v1.23/info`. To call an older version of the API use
-`/v1.22/info`.
+The current version of the API is v1.24 which means calling `/info` is the same
+as calling `/v1.24/info`. To call an older version of the API use
+`/v1.23/info`.
 
 Use the table below to find the API version for a Docker version:
 
 Docker version  | API version                        | Changes
 ----------------|------------------------------------|------------------------------------------------------
+1.12.x          | [1.24](docker_remote_api_v1.24.md) | [API changes](docker_remote_api.md#v1-24-api-changes)
 1.11.x          | [1.23](docker_remote_api_v1.23.md) | [API changes](docker_remote_api.md#v1-23-api-changes)
 1.10.x          | [1.22](docker_remote_api_v1.22.md) | [API changes](docker_remote_api.md#v1-22-api-changes)
 1.9.x           | [1.21](docker_remote_api_v1.21.md) | [API changes](docker_remote_api.md#v1-21-api-changes)
@@ -111,13 +112,29 @@ Running `docker rmi` emits an **untag** event when removing an image name.  The 
 
 This section lists each version from latest to oldest.  Each listing includes a link to the full documentation set and the changes relevant in that release.
 
+### v1.24 API changes
+
+[Docker Remote API v1.24](docker_remote_api_v1.24.md) documentation
+
 ### v1.23 API changes
 
 [Docker Remote API v1.23](docker_remote_api_v1.23.md) documentation
 
 * `GET /containers/json` returns the state of the container, one of `created`, `restarting`, `running`, `paused`, `exited` or `dead`.
+* `GET /containers/json` returns the mount points for the container.
 * `GET /networks/(name)` now returns an `Internal` field showing whether the network is internal or not.
-
+* `GET /networks/(name)` now returns an `EnableIPv6` field showing whether the network has ipv6 enabled or not.
+* `POST /containers/(name)/update` now supports updating container's restart policy.
+* `POST /networks/create` now supports enabling ipv6 on the network by setting the `EnableIPv6` field (doing this with a label will no longer work).
+* `GET /info` now returns `CgroupDriver` field showing what cgroup driver the daemon is using; `cgroupfs` or `systemd`.
+* `GET /info` now returns `KernelMemory` field, showing if "kernel memory limit" is supported.
+* `POST /containers/create` now takes `PidsLimit` field, if the kernel is >= 4.3 and the pids cgroup is supported.
+* `GET /containers/(id or name)/stats` now returns `pids_stats`, if the kernel is >= 4.3 and the pids cgroup is supported.
+* `POST /containers/create` now allows you to override usernamespaces remapping and use privileged options for the container.
+* `POST /containers/create` now allows specifying `nocopy` for named volumes, which disables automatic copying from the container path to the volume.
+* `POST /auth` now returns an `IdentityToken` when supported by a registry.
+* `POST /containers/create` with both `Hostname` and `Domainname` fields specified will result in the container's hostname being set to `Hostname`, rather than `Hostname.Domainname`.
+* `GET /volumes` now supports more filters, new added filters are `name` and `driver`.
 
 ### v1.22 API changes
 
@@ -142,7 +159,7 @@ This section lists each version from latest to oldest.  Each listing includes a 
 * `POST /containers/create` now allows you to set the static IPv4 and/or IPv6 address for the container.
 * `POST /networks/(id)/connect` now allows you to set the static IPv4 and/or IPv6 address for the container.
 * `GET /info` now includes the number of containers running, stopped, and paused.
-* `POST /networks/create` now supports restricting external access to the network by setting the `internal` field.
+* `POST /networks/create` now supports restricting external access to the network by setting the `Internal` field.
 * `POST /networks/(id)/disconnect` now includes a `Force` option to forcefully disconnect a container from network
 * `GET /containers/(id)/json` now returns the `NetworkID` of containers.
 * `POST /networks/create` Now supports an options field in the IPAM config that provides options

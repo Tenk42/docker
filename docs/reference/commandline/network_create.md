@@ -23,6 +23,7 @@ parent = "smn_cli"
     --ipam-driver=default    IP Address Management Driver
     --ipam-opt=map[]         Set custom IPAM driver specific options
     --ipv6                   Enable IPv6 networking
+    --label=[]               Set metadata on a network
     -o --opt=map[]           Set custom driver specific options
     --subnet=[]              Subnet in CIDR format that represents a network segment
 
@@ -97,7 +98,7 @@ disconnect` command.
 
 ## Specifying advanced options
 
-When you create a network, Engine creates a non-overlapping subnetwork for the network by default. This subnetwork is not a subdivision of an existing network. It is purely for ip-addressing purposes. You can override this default and specify subnetwork values directly using the the `--subnet` option. On a `bridge` network you can only create a single subnet:
+When you create a network, Engine creates a non-overlapping subnetwork for the network by default. This subnetwork is not a subdivision of an existing network. It is purely for ip-addressing purposes. You can override this default and specify subnetwork values directly using the `--subnet` option. On a `bridge` network you can only create a single subnet:
 
 ```bash
 docker network create -d --subnet=192.168.0.0/16
@@ -136,12 +137,16 @@ The following are those options and the equivalent docker daemon flags used for 
 | `com.docker.network.bridge.host_binding_ipv4`    | `--ip`      | Default IP when binding container ports               |
 | `com.docker.network.mtu`                         | `--mtu`     | Set the containers network MTU                        |
 
-The following arguments can be passed to `docker network create` for any network driver.
+The following arguments can be passed to `docker network create` for any network driver, again with their approximate
+equivalents to `docker daemon`.
 
-| Argument     | Equivalent | Description                              |
-|--------------|------------|------------------------------------------|
-| `--internal` | -          | Restricts external access to the network |
-| `--ipv6`     | `--ipv6`   | Enable IPv6 networking                   |
+| Argument     | Equivalent     | Description                                |
+|--------------|----------------|--------------------------------------------|
+| `--gateway`  | -              | ipv4 or ipv6 Gateway for the master subnet |
+| `--ip-range` | `--fixed-cidr` | Allocate IPs from a range                  |
+| `--internal` | -              | Restricts external access to the network   |
+| `--ipv6`     | `--ipv6`       | Enable IPv6 networking                     |
+| `--subnet`   | `--bip`        | Subnet for network                         |
 
 For example, let's use `-o` or `--opt` options to specify an IP address binding when publishing ports:
 

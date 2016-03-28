@@ -6,6 +6,7 @@ package dockerfile
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -16,9 +17,11 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/builder"
 	"github.com/docker/docker/builder/dockerfile/parser"
 	"github.com/docker/docker/pkg/archive"
@@ -37,7 +40,20 @@ import (
 	"github.com/docker/engine-api/types/strslice"
 )
 
-func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) error {
+func (b *Builder) addLabels() {
+	// merge labels
+	if len(b.options.Labels) > 0 {
+		logrus.Debugf("[BUILDER] setting labels %v", b.options.Labels)
+		if b.runConfig.Labels == nil {
+			b.runConfig.Labels = make(map[string]string)
+		}
+		for kL, vL := range b.options.Labels {
+			b.runConfig.Labels[kL] = vL
+		}
+	}
+}
+
+func (b *Builder) commit(id string, autoCmd strslice.StrSlice, comment string) error {
 	if b.disableCommit {
 		return nil
 	}
@@ -45,14 +61,15 @@ func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) 
 		return fmt.Errorf("Please provide a source image with `from` prior to commit")
 	}
 	b.runConfig.Image = b.image
+
 	if id == "" {
 		cmd := b.runConfig.Cmd
 		if runtime.GOOS != "windows" {
-			b.runConfig.Cmd = strslice.New("/bin/sh", "-c", "#(nop) "+comment)
+			b.runConfig.Cmd = strslice.StrSlice{"/bin/sh", "-c", "#(nop) " + comment}
 		} else {
-			b.runConfig.Cmd = strslice.New("cmd", "/S /C", "REM (nop) "+comment)
+			b.runConfig.Cmd = strslice.StrSlice{"cmd", "/S /C", "REM (nop) " + comment}
 		}
-		defer func(cmd *strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
+		defer func(cmd strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
 
 		hit, err := b.probeCache()
 		if err != nil {
@@ -70,10 +87,12 @@ func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) 
 	autoConfig := *b.runConfig
 	autoConfig.Cmd = autoCmd
 
-	commitCfg := &types.ContainerCommitConfig{
-		Author: b.maintainer,
-		Pause:  true,
-		Config: &autoConfig,
+	commitCfg := &backend.ContainerCommitConfig{
+		ContainerCommitConfig: types.ContainerCommitConfig{
+			Author: b.maintainer,
+			Pause:  true,
+			Config: &autoConfig,
+		},
 	}
 
 	// Commit the container
@@ -81,6 +100,7 @@ func (b *Builder) commit(id string, autoCmd *strslice.StrSlice, comment string) 
 	if err != nil {
 		return err
 	}
+
 	b.image = imageID
 	return nil
 }
@@ -171,11 +191,11 @@ func (b *Builder) runContextCommand(args []string, allowRemote bool, allowLocalD
 
 	cmd := b.runConfig.Cmd
 	if runtime.GOOS != "windows" {
-		b.runConfig.Cmd = strslice.New("/bin/sh", "-c", fmt.Sprintf("#(nop) %s %s in %s", cmdName, srcHash, dest))
+		b.runConfig.Cmd = strslice.StrSlice{"/bin/sh", "-c", fmt.Sprintf("#(nop) %s %s in %s", cmdName, srcHash, dest)}
 	} else {
-		b.runConfig.Cmd = strslice.New("cmd", "/S", "/C", fmt.Sprintf("REM (nop) %s %s in %s", cmdName, srcHash, dest))
+		b.runConfig.Cmd = strslice.StrSlice{"cmd", "/S", "/C", fmt.Sprintf("REM (nop) %s %s in %s", cmdName, srcHash, dest)}
 	}
-	defer func(cmd *strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
+	defer func(cmd strslice.StrSlice) { b.runConfig.Cmd = cmd }(cmd)
 
 	if hit, err := b.probeCache(); err != nil {
 		return err
@@ -527,15 +547,15 @@ func (b *Builder) create() (string, error) {
 	b.tmpContainers[c.ID] = struct{}{}
 	fmt.Fprintf(b.Stdout, " ---> Running in %s\n", stringid.TruncateID(c.ID))
 
-	if config.Cmd.Len() > 0 {
-		// override the entry point that may have been picked up from the base image
-		if err := b.docker.ContainerUpdateCmdOnBuild(c.ID, config.Cmd.Slice()); err != nil {
-			return "", err
-		}
+	// override the entry point that may have been picked up from the base image
+	if err := b.docker.ContainerUpdateCmdOnBuild(c.ID, config.Cmd); err != nil {
+		return "", err
 	}
 
 	return c.ID, nil
 }
+
+var errCancelled = errors.New("build cancelled")
 
 func (b *Builder) run(cID string) (err error) {
 	errCh := make(chan error)
@@ -544,14 +564,19 @@ func (b *Builder) run(cID string) (err error) {
 	}()
 
 	finished := make(chan struct{})
-	defer close(finished)
+	var once sync.Once
+	finish := func() { close(finished) }
+	cancelErrCh := make(chan error, 1)
+	defer once.Do(finish)
 	go func() {
 		select {
-		case <-b.cancelled:
+		case <-b.clientCtx.Done():
 			logrus.Debugln("Build cancelled, killing and removing container:", cID)
 			b.docker.ContainerKill(cID, 0)
 			b.removeContainer(cID)
+			cancelErrCh <- errCancelled
 		case <-finished:
+			cancelErrCh <- nil
 		}
 	}()
 
@@ -567,12 +592,12 @@ func (b *Builder) run(cID string) (err error) {
 	if ret, _ := b.docker.ContainerWait(cID, -1); ret != 0 {
 		// TODO: change error type, because jsonmessage.JSONError assumes HTTP
 		return &jsonmessage.JSONError{
-			Message: fmt.Sprintf("The command '%s' returned a non-zero code: %d", b.runConfig.Cmd.ToString(), ret),
+			Message: fmt.Sprintf("The command '%s' returned a non-zero code: %d", strings.Join(b.runConfig.Cmd, " "), ret),
 			Code:    ret,
 		}
 	}
-
-	return nil
+	once.Do(finish)
+	return <-cancelErrCh
 }
 
 func (b *Builder) removeContainer(c string) error {

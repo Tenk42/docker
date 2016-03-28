@@ -81,6 +81,14 @@ if command -v git &> /dev/null && git rev-parse &> /dev/null; then
 	GITCOMMIT=$(git rev-parse --short HEAD)
 	if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 		GITCOMMIT="$GITCOMMIT-unsupported"
+		echo "#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+		echo "# GITCOMMIT = $GITCOMMIT"
+		echo "# The version you are building is listed as unsupported because"
+		echo "# there are some files in the git repository that are in an uncommited state."
+		echo "# Commit these changes, or add to .gitignore to remove the -unsupported from the version."
+		echo "# Here is the current list:"
+		git status --porcelain --untracked-files=no
+		echo "#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
 	fi
 	! BUILDTIME=$(date --rfc-3339 ns | sed -e 's/ /T/') &> /dev/null
 	if [ -z $BUILDTIME ]; then
@@ -118,8 +126,10 @@ fi
 
 if [ -z "$DOCKER_CLIENTONLY" ]; then
 	DOCKER_BUILDTAGS+=" daemon"
-	if pkg-config libsystemd-journal 2> /dev/null ; then
+	if pkg-config 'libsystemd >= 209' 2> /dev/null ; then
 		DOCKER_BUILDTAGS+=" journald"
+	elif pkg-config 'libsystemd-journal' 2> /dev/null ; then
+		DOCKER_BUILDTAGS+=" journald journald_compat"
 	fi
 fi
 
@@ -135,7 +145,7 @@ fi
 # functionality.
 if \
 	command -v gcc &> /dev/null \
-	&& ! ( echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -ldevmapper -xc - -o /dev/null &> /dev/null ) \
+	&& ! ( echo -e  '#include <libdevmapper.h>\nint main() { dm_task_deferred_remove(NULL); }'| gcc -xc - -o /dev/null -ldevmapper &> /dev/null ) \
 ; then
        DOCKER_BUILDTAGS+=' libdm_no_deferred_remove'
 fi
@@ -167,12 +177,12 @@ BUILDFLAGS=( $BUILDFLAGS "${ORIG_BUILDFLAGS[@]}" )
 # Test timeout.
 
 if [ "${DOCKER_ENGINE_GOARCH}" == "arm" ]; then
-	: ${TIMEOUT:=210m}
+	: ${TIMEOUT:=10m}
+elif [ "${DOCKER_ENGINE_GOARCH}" == "windows" ]; then
+	: ${TIMEOUT:=8m}
 else
-	: ${TIMEOUT:=120m}
+	: ${TIMEOUT:=5m}
 fi
-
-TESTFLAGS+=" -test.timeout=${TIMEOUT}"
 
 LDFLAGS_STATIC_DOCKER="
 	$LDFLAGS_STATIC
@@ -237,6 +247,8 @@ test_env() {
 	# use "env -i" to tightly control the environment variables that bleed into the tests
 	env -i \
 		DEST="$DEST" \
+		DOCKER_TLS_VERIFY="$DOCKER_TEST_TLS_VERIFY" \
+		DOCKER_CERT_PATH="$DOCKER_TEST_CERT_PATH" \
 		DOCKER_ENGINE_GOARCH="$DOCKER_ENGINE_GOARCH" \
 		DOCKER_GRAPHDRIVER="$DOCKER_GRAPHDRIVER" \
 		DOCKER_USERLANDPROXY="$DOCKER_USERLANDPROXY" \
@@ -244,6 +256,7 @@ test_env() {
 		DOCKER_REMAP_ROOT="$DOCKER_REMAP_ROOT" \
 		DOCKER_REMOTE_DAEMON="$DOCKER_REMOTE_DAEMON" \
 		GOPATH="$GOPATH" \
+		GOTRACEBACK=all \
 		HOME="$ABS_DEST/fake-HOME" \
 		PATH="$PATH" \
 		TEMP="$TEMP" \
@@ -282,6 +295,24 @@ bundle() {
 	local bundle="$1"; shift
 	echo "---> Making bundle: $(basename "$bundle") (in $DEST)"
 	source "$SCRIPTDIR/make/$bundle" "$@"
+}
+
+copy_containerd() {
+	dir="$1"
+	# Add nested executables to bundle dir so we have complete set of
+	# them available, but only if the native OS/ARCH is the same as the
+	# OS/ARCH of the build target
+	if [ "$(go env GOOS)/$(go env GOARCH)" == "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" ]; then
+		if [ -x /usr/local/bin/docker-runc ]; then
+			echo "Copying nested executables into $dir"
+			for file in containerd containerd-shim containerd-ctr runc; do
+				cp "/usr/local/bin/docker-$file" "$dir/"
+				if [ "$2" == "hash" ]; then
+					hash_files "$dir/docker-$file"
+				fi
+			done
+		fi
+	fi
 }
 
 main() {

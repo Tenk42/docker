@@ -23,7 +23,7 @@
 # the case. Therefore, you don't have to disable it anymore.
 #
 
-FROM ubuntu:trusty
+FROM debian:jessie
 
 # add zfs ppa
 RUN apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys E871F18B51E0147C77796AC81196BA81F6B0FC61 \
@@ -38,9 +38,11 @@ RUN echo deb http://llvm.org/apt/trusty/ llvm-toolchain-trusty main > /etc/apt/s
 # Packaged dependencies
 RUN apt-get update && apt-get install -y \
 	apparmor \
+	apt-utils \
 	aufs-tools \
 	automake \
 	bash-completion \
+	bsdmainutils \
 	btrfs-tools \
 	build-essential \
 	clang-3.8 \
@@ -58,17 +60,18 @@ RUN apt-get update && apt-get install -y \
 	libsystemd-journal-dev \
 	libtool \
 	mercurial \
+	net-tools \
 	pkg-config \
 	python-dev \
 	python-mock \
 	python-pip \
 	python-websocket \
-	s3cmd=1.1.0* \
 	ubuntu-zfs \
 	xfsprogs \
 	libzfs-dev \
 	tar \
 	--no-install-recommends \
+	&& pip install awscli==1.10.15 \
 	&& ln -snf /usr/bin/clang-3.8 /usr/local/bin/clang \
 	&& ln -snf /usr/bin/clang++-3.8 /usr/local/bin/clang++
 
@@ -90,15 +93,17 @@ RUN cd /usr/local/lvm2 \
 
 # Configure the container for OSX cross compilation
 ENV OSX_SDK MacOSX10.11.sdk
+ENV OSX_CROSS_COMMIT 8aa9b71a394905e6c5f4b59e2b97b87a004658a4
 RUN set -x \
 	&& export OSXCROSS_PATH="/osxcross" \
-	&& git clone --depth 1 https://github.com/tpoechtrager/osxcross.git $OSXCROSS_PATH \
+	&& git clone https://github.com/tpoechtrager/osxcross.git $OSXCROSS_PATH \
+	&& ( cd $OSXCROSS_PATH && git checkout -q $OSX_CROSS_COMMIT) \
 	&& curl -sSL https://s3.dockerproject.org/darwin/${OSX_SDK}.tar.xz -o "${OSXCROSS_PATH}/tarballs/${OSX_SDK}.tar.xz" \
 	&& UNATTENDED=yes OSX_VERSION_MIN=10.6 ${OSXCROSS_PATH}/build.sh
 ENV PATH /osxcross/target/bin:$PATH
 
 # install seccomp: the version shipped in trusty is too old
-ENV SECCOMP_VERSION 2.2.3
+ENV SECCOMP_VERSION 2.3.0
 RUN set -x \
 	&& export SECCOMP_PATH="$(mktemp -d)" \
 	&& curl -fsSL "https://github.com/seccomp/libseccomp/releases/download/v${SECCOMP_VERSION}/libseccomp-${SECCOMP_VERSION}.tar.gz" \
@@ -128,9 +133,6 @@ ENV DOCKER_CROSSPLATFORMS \
 	darwin/amd64 \
 	freebsd/amd64 freebsd/386 freebsd/arm \
 	windows/amd64 windows/386
-
-# (set an explicit GOARM of 5 for maximum compatibility)
-ENV GOARM 5
 
 # This has been commented out and kept as reference because we don't support compiling with older Go anymore.
 # ENV GOFMT_VERSION 1.3.3
@@ -168,14 +170,15 @@ RUN set -x \
 	&& rm -rf "$GOPATH"
 
 # Install notary server
-ENV NOTARY_VERSION docker-v1.10-5
+ENV NOTARY_VERSION docker-v1.11-3
 RUN set -x \
+	&& export GO15VENDOREXPERIMENT=1 \
 	&& export GOPATH="$(mktemp -d)" \
 	&& git clone https://github.com/docker/notary.git "$GOPATH/src/github.com/docker/notary" \
 	&& (cd "$GOPATH/src/github.com/docker/notary" && git checkout -q "$NOTARY_VERSION") \
-	&& GOPATH="$GOPATH/src/github.com/docker/notary/Godeps/_workspace:$GOPATH" \
+	&& GOPATH="$GOPATH/src/github.com/docker/notary/vendor:$GOPATH" \
 		go build -o /usr/local/bin/notary-server github.com/docker/notary/cmd/notary-server \
-	&& GOPATH="$GOPATH/src/github.com/docker/notary/Godeps/_workspace:$GOPATH" \
+	&& GOPATH="$GOPATH/src/github.com/docker/notary/vendor:$GOPATH" \
 		go build -o /usr/local/bin/notary github.com/docker/notary/cmd/notary \
 	&& rm -rf "$GOPATH"
 
@@ -185,13 +188,6 @@ RUN git clone https://github.com/docker/docker-py.git /docker-py \
 	&& cd /docker-py \
 	&& git checkout -q $DOCKER_PY_COMMIT \
 	&& pip install -r test-requirements.txt
-
-# Setup s3cmd config
-RUN { \
-		echo '[default]'; \
-		echo 'access_key=$AWS_ACCESS_KEY'; \
-		echo 'secret_key=$AWS_SECRET_KEY'; \
-	} > ~/.s3cfg
 
 # Set user.email so crosbymichael's in-container merge commits go smoothly
 RUN git config --global user.email 'docker-dummy@example.com'
@@ -245,6 +241,28 @@ RUN set -x \
 	&& (cd "$GOPATH/src/github.com/akavel/rsrc" && git checkout -q "$RSRC_COMMIT") \
 	&& go build -v -o /usr/local/bin/rsrc github.com/akavel/rsrc \
 	&& rm -rf "$GOPATH"
+
+# Install runc
+ENV RUNC_COMMIT d563bd134293c1026976a8f5764d5df5612f1dbf
+RUN set -x \
+	&& export GOPATH="$(mktemp -d)" \
+	&& git clone git://github.com/opencontainers/runc.git "$GOPATH/src/github.com/opencontainers/runc" \
+	&& cd "$GOPATH/src/github.com/opencontainers/runc" \
+	&& git checkout -q "$RUNC_COMMIT" \
+	&& make static BUILDTAGS="seccomp apparmor selinux" \
+	&& cp runc /usr/local/bin/docker-runc
+
+# Install containerd
+ENV CONTAINERD_COMMIT c761085e92be09df9d5298f852c328b538f5dc2f
+RUN set -x \
+	&& export GOPATH="$(mktemp -d)" \
+	&& git clone git://github.com/docker/containerd.git "$GOPATH/src/github.com/docker/containerd" \
+	&& cd "$GOPATH/src/github.com/docker/containerd" \
+	&& git checkout -q "$CONTAINERD_COMMIT" \
+	&& make static \
+	&& cp bin/containerd /usr/local/bin/docker-containerd \
+	&& cp bin/containerd-shim /usr/local/bin/docker-containerd-shim \
+	&& cp bin/ctr /usr/local/bin/docker-containerd-ctr
 
 # Wrap all commands in the "docker-in-docker" script to allow nested containers
 ENTRYPOINT ["hack/dind"]
