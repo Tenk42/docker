@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/network"
 	derr "github.com/docker/docker/errors"
+	"github.com/docker/docker/pkg/stringid"
 	"github.com/docker/docker/runconfig"
 	containertypes "github.com/docker/engine-api/types/container"
 	networktypes "github.com/docker/engine-api/types/network"
@@ -48,10 +49,11 @@ func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libn
 		sboxOptions = append(sboxOptions, libnetwork.OptionUseDefaultSandbox())
 		sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
 		sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+	} else {
+		// OptionUseExternalKey is mandatory for userns support.
+		// But optional for non-userns support
+		sboxOptions = append(sboxOptions, libnetwork.OptionUseExternalKey())
 	}
-	// OptionUseExternalKey is mandatory for userns support.
-	// But optional for non-userns support
-	sboxOptions = append(sboxOptions, libnetwork.OptionUseExternalKey())
 
 	container.HostsPath, err = container.GetRootResourcePath("hosts")
 	if err != nil {
@@ -322,13 +324,6 @@ func (daemon *Daemon) updateContainerNetworkSettings(container *container.Contai
 		err error
 	)
 
-	// TODO Windows: Remove this once TP4 builds are not supported
-	// Windows TP4 build don't support libnetwork and in that case
-	// daemon.netController will be nil
-	if daemon.netController == nil {
-		return nil
-	}
-
 	mode := container.HostConfig.NetworkMode
 	if container.Config.NetworkDisabled || mode.IsContainer() {
 		return nil
@@ -491,6 +486,18 @@ func (daemon *Daemon) updateNetworkConfig(container *container.Container, idOrNa
 		if endpointConfig != nil && len(endpointConfig.Aliases) > 0 {
 			return nil, runconfig.ErrUnsupportedNetworkAndAlias
 		}
+	} else {
+		addShortID := true
+		shortID := stringid.TruncateID(container.ID)
+		for _, alias := range endpointConfig.Aliases {
+			if alias == shortID {
+				addShortID = false
+				break
+			}
+		}
+		if addShortID {
+			endpointConfig.Aliases = append(endpointConfig.Aliases, shortID)
+		}
 	}
 
 	n, err := daemon.FindNetwork(idOrName)
@@ -511,13 +518,9 @@ func (daemon *Daemon) updateNetworkConfig(container *container.Container, idOrNa
 }
 
 func (daemon *Daemon) connectToNetwork(container *container.Container, idOrName string, endpointConfig *networktypes.EndpointSettings, updateSettings bool) (err error) {
-	// TODO Windows: Remove this once TP4 builds are not supported
-	// Windows TP4 build don't support libnetwork and in that case
-	// daemon.netController will be nil
-	if daemon.netController == nil {
-		return nil
+	if endpointConfig == nil {
+		endpointConfig = &networktypes.EndpointSettings{}
 	}
-
 	n, err := daemon.updateNetworkConfig(container, idOrName, endpointConfig, updateSettings)
 	if err != nil {
 		return err
@@ -546,10 +549,7 @@ func (daemon *Daemon) connectToNetwork(container *container.Container, idOrName 
 			}
 		}
 	}()
-
-	if endpointConfig != nil {
-		container.NetworkSettings.Networks[n.Name()] = endpointConfig
-	}
+	container.NetworkSettings.Networks[n.Name()] = endpointConfig
 
 	if err := daemon.updateEndpointNetworkSettings(container, n, ep); err != nil {
 		return err
@@ -644,13 +644,6 @@ func disconnectFromNetwork(container *container.Container, n libnetwork.Network,
 func (daemon *Daemon) initializeNetworking(container *container.Container) error {
 	var err error
 
-	// TODO Windows: Remove this once TP4 builds are not supported
-	// Windows TP4 build don't support libnetwork and in that case
-	// daemon.netController will be nil
-	if daemon.netController == nil {
-		return nil
-	}
-
 	if container.HostConfig.NetworkMode.IsContainer() {
 		// we need to get the hosts files from the container to join
 		nc, err := daemon.getNetworkedContainer(container.ID, container.HostConfig.NetworkMode.ConnectedContainer())
@@ -720,7 +713,7 @@ func (daemon *Daemon) releaseNetwork(container *container.Container) {
 
 	sb, err := daemon.netController.SandboxByID(sid)
 	if err != nil {
-		logrus.Errorf("error locating sandbox id %s: %v", sid, err)
+		logrus.Warnf("error locating sandbox id %s: %v", sid, err)
 		return
 	}
 

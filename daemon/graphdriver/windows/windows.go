@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"github.com/Microsoft/go-winio/archive/tar"
@@ -26,6 +27,8 @@ import (
 	"github.com/docker/docker/pkg/chrootarchive"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/docker/docker/pkg/longpath"
+	"github.com/docker/docker/pkg/system"
 	"github.com/vbatts/tar-split/tar/storage"
 )
 
@@ -49,6 +52,10 @@ type Driver struct {
 }
 
 var _ graphdriver.DiffGetterDriver = &Driver{}
+
+func isTP5OrOlder() bool {
+	return system.GetOSVersion().Build <= 14300
+}
 
 // InitFilter returns a new Windows storage filter driver.
 func InitFilter(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (graphdriver.Driver, error) {
@@ -106,8 +113,22 @@ func (d *Driver) Exists(id string) bool {
 	return result
 }
 
-// Create creates a new layer with the given id.
-func (d *Driver) Create(id, parent, mountLabel string) error {
+// CreateReadWrite creates a layer that is writable for use as a container
+// file system.
+func (d *Driver) CreateReadWrite(id, parent, mountLabel string, storageOpt map[string]string) error {
+	return d.create(id, parent, mountLabel, false, storageOpt)
+}
+
+// Create creates a new read-only layer with the given id.
+func (d *Driver) Create(id, parent, mountLabel string, storageOpt map[string]string) error {
+	return d.create(id, parent, mountLabel, true, storageOpt)
+}
+
+func (d *Driver) create(id, parent, mountLabel string, readOnly bool, storageOpt map[string]string) error {
+	if len(storageOpt) != 0 {
+		return fmt.Errorf("--storage-opt is not supported for windows")
+	}
+
 	rPId, err := d.resolveID(parent)
 	if err != nil {
 		return err
@@ -120,27 +141,54 @@ func (d *Driver) Create(id, parent, mountLabel string) error {
 
 	var layerChain []string
 
-	parentIsInit := strings.HasSuffix(rPId, "-init")
-
-	if !parentIsInit && rPId != "" {
+	if rPId != "" {
 		parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
 		if err != nil {
 			return err
 		}
-		layerChain = []string{parentPath}
+		if _, err := os.Stat(filepath.Join(parentPath, "Files")); err == nil {
+			// This is a legitimate parent layer (not the empty "-init" layer),
+			// so include it in the layer chain.
+			layerChain = []string{parentPath}
+		}
 	}
 
 	layerChain = append(layerChain, parentChain...)
 
-	if parentIsInit {
-		if len(layerChain) == 0 {
-			return fmt.Errorf("Cannot create a read/write layer without a parent layer.")
-		}
-		if err := hcsshim.CreateSandboxLayer(d.info, id, layerChain[0], layerChain); err != nil {
+	if readOnly {
+		if err := hcsshim.CreateLayer(d.info, id, rPId); err != nil {
 			return err
 		}
 	} else {
-		if err := hcsshim.CreateLayer(d.info, id, rPId); err != nil {
+		var parentPath string
+		if len(layerChain) != 0 {
+			parentPath = layerChain[0]
+		}
+
+		if isTP5OrOlder() {
+			// Pre-create the layer directory, providing an ACL to give the Hyper-V Virtual Machines
+			// group access. This is necessary to ensure that Hyper-V containers can access the
+			// virtual machine data. This is not necessary post-TP5.
+			path, err := syscall.UTF16FromString(filepath.Join(d.info.HomeDir, id))
+			if err != nil {
+				return err
+			}
+			// Give system and administrators full control, and VMs read, write, and execute.
+			// Mark these ACEs as inherited.
+			sd, err := winio.SddlToSecurityDescriptor("D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FRFWFX;;;S-1-5-83-0)")
+			if err != nil {
+				return err
+			}
+			err = syscall.CreateDirectory(&path[0], &syscall.SecurityAttributes{
+				Length:             uint32(unsafe.Sizeof(syscall.SecurityAttributes{})),
+				SecurityDescriptor: uintptr(unsafe.Pointer(&sd[0])),
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		if err := hcsshim.CreateSandboxLayer(d.info, id, parentPath, layerChain); err != nil {
 			return err
 		}
 	}
@@ -315,10 +363,10 @@ func (d *Driver) Changes(id, parent string) ([]archive.Change, error) {
 		}
 		name = filepath.ToSlash(name)
 		if fileInfo == nil {
-			changes = append(changes, archive.Change{name, archive.ChangeDelete})
+			changes = append(changes, archive.Change{Path: name, Kind: archive.ChangeDelete})
 		} else {
 			// Currently there is no way to tell between an add and a modify.
-			changes = append(changes, archive.Change{name, archive.ChangeModify})
+			changes = append(changes, archive.Change{Path: name, Kind: archive.ChangeModify})
 		}
 	}
 	return changes, nil
@@ -328,45 +376,49 @@ func (d *Driver) Changes(id, parent string) ([]archive.Change, error) {
 // layer with the specified id and parent, returning the size of the
 // new layer in bytes.
 // The layer should not be mounted when calling this function
-func (d *Driver) ApplyDiff(id, parent string, diff archive.Reader) (size int64, err error) {
-	rPId, err := d.resolveID(parent)
-	if err != nil {
-		return
-	}
-
+func (d *Driver) ApplyDiff(id, parent string, diff archive.Reader) (int64, error) {
 	if d.info.Flavour == diffDriver {
 		start := time.Now().UTC()
 		logrus.Debugf("WindowsGraphDriver ApplyDiff: Start untar layer")
 		destination := d.dir(id)
 		destination = filepath.Dir(destination)
-		if size, err = chrootarchive.ApplyUncompressedLayer(destination, diff, nil); err != nil {
-			return
+		size, err := chrootarchive.ApplyUncompressedLayer(destination, diff, nil)
+		if err != nil {
+			return 0, err
 		}
 		logrus.Debugf("WindowsGraphDriver ApplyDiff: Untar time: %vs", time.Now().UTC().Sub(start).Seconds())
 
-		return
+		return size, nil
 	}
 
-	parentChain, err := d.getLayerChain(rPId)
-	if err != nil {
-		return
+	var layerChain []string
+	if parent != "" {
+		rPId, err := d.resolveID(parent)
+		if err != nil {
+			return 0, err
+		}
+		parentChain, err := d.getLayerChain(rPId)
+		if err != nil {
+			return 0, err
+		}
+		parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
+		if err != nil {
+			return 0, err
+		}
+		layerChain = append(layerChain, parentPath)
+		layerChain = append(layerChain, parentChain...)
 	}
-	parentPath, err := hcsshim.GetLayerMountPath(d.info, rPId)
-	if err != nil {
-		return
-	}
-	layerChain := []string{parentPath}
-	layerChain = append(layerChain, parentChain...)
 
-	if size, err = d.importLayer(id, diff, layerChain); err != nil {
-		return
+	size, err := d.importLayer(id, diff, layerChain)
+	if err != nil {
+		return 0, err
 	}
 
 	if err = d.setLayerChain(id, layerChain); err != nil {
-		return
+		return 0, err
 	}
 
-	return
+	return size, nil
 }
 
 // DiffSize calculates the changes between the specified layer
@@ -401,6 +453,8 @@ type CustomImageInfo struct {
 	Path        string
 	Size        int64
 	CreatedTime time.Time
+	OSVersion   string   `json:"-"`
+	OSFeatures  []string `json:"-"`
 }
 
 // GetCustomImageInfos returns the image infos for window specific
@@ -432,7 +486,7 @@ func (d *Driver) GetCustomImageInfos() ([]CustomImageInfo, error) {
 		h := sha512.Sum384([]byte(folderName))
 		id := fmt.Sprintf("%x", h[:32])
 
-		if err := d.Create(id, "", ""); err != nil {
+		if err := d.Create(id, "", "", nil); err != nil {
 			return nil, err
 		}
 		// Create the alternate ID file.
@@ -441,6 +495,21 @@ func (d *Driver) GetCustomImageInfos() ([]CustomImageInfo, error) {
 		}
 
 		imageData.ID = id
+
+		// For now, hard code that all base images except nanoserver depend on win32k support
+		if imageData.Name != "NanoServer" {
+			imageData.OSFeatures = append(imageData.OSFeatures, "win32k")
+		}
+
+		versionData := strings.Split(imageData.Version, ".")
+		if len(versionData) != 4 {
+			logrus.Warn("Could not parse Windows version %s", imageData.Version)
+		} else {
+			// Include just major.minor.build, skip the fourth version field, which does not influence
+			// OS compatibility.
+			imageData.OSVersion = strings.Join(versionData[:3], ".")
+		}
+
 		images = append(images, imageData)
 	}
 
@@ -485,34 +554,6 @@ func writeTarFromLayer(r hcsshim.LayerReader, w io.Writer) error {
 
 // exportLayer generates an archive from a layer based on the given ID.
 func (d *Driver) exportLayer(id string, parentLayerPaths []string) (archive.Archive, error) {
-	if hcsshim.IsTP4() {
-		// Export in TP4 format to maintain compatibility with existing images and
-		// because ExportLayer is somewhat broken on TP4 and can't work with the new
-		// scheme.
-		tempFolder, err := ioutil.TempDir("", "hcs")
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			if err != nil {
-				os.RemoveAll(tempFolder)
-			}
-		}()
-
-		if err = hcsshim.ExportLayer(d.info, id, tempFolder, parentLayerPaths); err != nil {
-			return nil, err
-		}
-		archive, err := archive.Tar(tempFolder, archive.Uncompressed)
-		if err != nil {
-			return nil, err
-		}
-		return ioutils.NewReadCloserWrapper(archive, func() error {
-			err := archive.Close()
-			os.RemoveAll(tempFolder)
-			return err
-		}), nil
-	}
-
 	var r hcsshim.LayerReader
 	r, err := hcsshim.NewLayerReader(d.info, id, parentLayerPaths)
 	if err != nil {
@@ -546,6 +587,12 @@ func writeLayerFromTar(r archive.Reader, w hcsshim.LayerWriter) (int64, error) {
 				return 0, err
 			}
 			hdr, err = t.Next()
+		} else if hdr.Typeflag == tar.TypeLink {
+			err = w.AddLink(filepath.FromSlash(hdr.Name), filepath.FromSlash(hdr.Linkname))
+			if err != nil {
+				return 0, err
+			}
+			hdr, err = t.Next()
 		} else {
 			var (
 				name     string
@@ -561,6 +608,24 @@ func writeLayerFromTar(r archive.Reader, w hcsshim.LayerWriter) (int64, error) {
 				return 0, err
 			}
 			buf.Reset(w)
+
+			// Add the Hyper-V Virutal Machine group ACE to the security descriptor
+			// for TP5 so that Xenons can access all files. This is not necessary
+			// for post-TP5 builds.
+			if isTP5OrOlder() {
+				if sddl, ok := hdr.Winheaders["sd"]; ok {
+					var ace string
+					if hdr.Typeflag == tar.TypeDir {
+						ace = "(A;OICI;0x1200a9;;;S-1-5-83-0)"
+					} else {
+						ace = "(A;;0x1200a9;;;S-1-5-83-0)"
+					}
+					if hdr.Winheaders["sd"], ok = addAceToSddlDacl(sddl, ace); !ok {
+						logrus.Debugf("failed to add VM ACE to %s", sddl)
+					}
+				}
+			}
+
 			hdr, err = backuptar.WriteBackupStreamFromTarFile(buf, t, hdr)
 			ferr := buf.Flush()
 			if ferr != nil {
@@ -575,32 +640,53 @@ func writeLayerFromTar(r archive.Reader, w hcsshim.LayerWriter) (int64, error) {
 	return totalSize, nil
 }
 
-// importLayer adds a new layer to the tag and graph store based on the given data.
-func (d *Driver) importLayer(id string, layerData archive.Reader, parentLayerPaths []string) (size int64, err error) {
-	if hcsshim.IsTP4() {
-		// Import from TP4 format to maintain compatibility with existing images.
-		var tempFolder string
-		tempFolder, err = ioutil.TempDir("", "hcs")
-		if err != nil {
-			return
-		}
-		defer os.RemoveAll(tempFolder)
-
-		if size, err = chrootarchive.ApplyLayer(tempFolder, layerData); err != nil {
-			return
-		}
-		if err = hcsshim.ImportLayer(d.info, id, tempFolder, parentLayerPaths); err != nil {
-			return
-		}
-		return
+func addAceToSddlDacl(sddl, ace string) (string, bool) {
+	daclStart := strings.Index(sddl, "D:")
+	if daclStart < 0 {
+		return sddl, false
 	}
 
+	dacl := sddl[daclStart:]
+	daclEnd := strings.Index(dacl, "S:")
+	if daclEnd < 0 {
+		daclEnd = len(dacl)
+	}
+	dacl = dacl[:daclEnd]
+
+	if strings.Contains(dacl, ace) {
+		return sddl, true
+	}
+
+	i := 2
+	for i+1 < len(dacl) {
+		if dacl[i] != '(' {
+			return sddl, false
+		}
+
+		if dacl[i+1] == 'A' {
+			break
+		}
+
+		i += 2
+		for p := 1; i < len(dacl) && p > 0; i++ {
+			if dacl[i] == '(' {
+				p++
+			} else if dacl[i] == ')' {
+				p--
+			}
+		}
+	}
+
+	return sddl[:daclStart+i] + ace + sddl[daclStart+i:], true
+}
+
+// importLayer adds a new layer to the tag and graph store based on the given data.
+func (d *Driver) importLayer(id string, layerData archive.Reader, parentLayerPaths []string) (size int64, err error) {
 	var w hcsshim.LayerWriter
 	w, err = hcsshim.NewLayerWriter(d.info, id, parentLayerPaths)
 	if err != nil {
 		return
 	}
-
 	size, err = writeLayerFromTar(layerData, w)
 	if err != nil {
 		w.Close()
@@ -678,7 +764,7 @@ func (fg *fileGetCloserWithBackupPrivileges) Get(filename string) (io.ReadCloser
 	// file can be opened even if the caller does not actually have access to it according
 	// to the security descriptor.
 	err := winio.RunWithPrivilege(winio.SeBackupPrivilege, func() error {
-		path := filepath.Join(fg.path, filename)
+		path := longpath.AddPrefix(filepath.Join(fg.path, filename))
 		p, err := syscall.UTF16FromString(path)
 		if err != nil {
 			return err
@@ -713,32 +799,6 @@ func (d *Driver) DiffGetter(id string) (graphdriver.FileGetCloser, error) {
 	id, err := d.resolveID(id)
 	if err != nil {
 		return nil, err
-	}
-
-	if hcsshim.IsTP4() {
-		// The export format for TP4 is different from the contents of the layer, so
-		// fall back to exporting the layer and getting file contents from there.
-		layerChain, err := d.getLayerChain(id)
-		if err != nil {
-			return nil, err
-		}
-
-		var tempFolder string
-		tempFolder, err = ioutil.TempDir("", "hcs")
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			if err != nil {
-				os.RemoveAll(tempFolder)
-			}
-		}()
-
-		if err = hcsshim.ExportLayer(d.info, id, tempFolder, layerChain); err != nil {
-			return nil, err
-		}
-
-		return &fileGetDestroyCloser{storage.NewPathFileGetter(tempFolder), tempFolder}, nil
 	}
 
 	return &fileGetCloserWithBackupPrivileges{d.dir(id)}, nil

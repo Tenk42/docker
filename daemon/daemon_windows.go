@@ -13,17 +13,18 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/graphdriver"
+	"github.com/docker/docker/daemon/graphdriver/windows" // register the windows graph driver
 	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/image"
 	"github.com/docker/docker/layer"
-	"github.com/docker/docker/reference"
-	"github.com/docker/docker/runconfig"
-	// register the windows graph driver
-	"github.com/docker/docker/daemon/graphdriver/windows"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/parsers"
+	"github.com/docker/docker/pkg/sysinfo"
 	"github.com/docker/docker/pkg/system"
+	"github.com/docker/docker/reference"
+	"github.com/docker/docker/runconfig"
 	"github.com/docker/engine-api/types"
+	pblkiodev "github.com/docker/engine-api/types/blkiodev"
 	containertypes "github.com/docker/engine-api/types/container"
 	"github.com/docker/libnetwork"
 	nwconfig "github.com/docker/libnetwork/config"
@@ -34,11 +35,10 @@ import (
 )
 
 const (
-	defaultVirtualSwitch = "Virtual Switch"
-	defaultNetworkSpace  = "172.16.0.0/12"
-	platformSupported    = true
-	windowsMinCPUShares  = 1
-	windowsMaxCPUShares  = 10000
+	defaultNetworkSpace = "172.16.0.0/12"
+	platformSupported   = true
+	windowsMinCPUShares = 1
+	windowsMaxCPUShares = 10000
 )
 
 func getBlkioWeightDevices(config *containertypes.HostConfig) ([]blkiodev.WeightDevice, error) {
@@ -95,10 +95,65 @@ func (daemon *Daemon) adaptContainerSettings(hostConfig *containertypes.HostConf
 	return nil
 }
 
+func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysinfo.SysInfo) ([]string, error) {
+	warnings := []string{}
+
+	// cpu subsystem checks and adjustments
+	if resources.CPUPercent < 0 || resources.CPUPercent > 100 {
+		return warnings, fmt.Errorf("Range of CPU percent is from 1 to 100")
+	}
+
+	if resources.CPUPercent > 0 && resources.CPUShares > 0 {
+		return warnings, fmt.Errorf("Conflicting options: CPU Shares and CPU Percent cannot both be set")
+	}
+
+	// TODO Windows: Add more validation of resource settings not supported on Windows
+
+	if resources.BlkioWeight > 0 {
+		warnings = append(warnings, "Windows does not support Block I/O weight. Weight discarded.")
+		logrus.Warnf("Windows does not support Block I/O weight. --blkio-weight discarded.")
+		resources.BlkioWeight = 0
+	}
+	if len(resources.BlkioWeightDevice) > 0 {
+		warnings = append(warnings, "Windows does not support Block I/O weight_device.")
+		logrus.Warnf("Windows does not support Block I/O weight_device. --blkio-weight-device discarded.")
+		resources.BlkioWeightDevice = []*pblkiodev.WeightDevice{}
+	}
+	if len(resources.BlkioDeviceReadBps) > 0 {
+		warnings = append(warnings, "Windows does not support Block read limit in bytes per second.")
+		logrus.Warnf("Windows does not support Block I/O read limit in bytes per second. --device-read-bps discarded.")
+		resources.BlkioDeviceReadBps = []*pblkiodev.ThrottleDevice{}
+	}
+	if len(resources.BlkioDeviceWriteBps) > 0 {
+		warnings = append(warnings, "Windows does not support Block write limit in bytes per second.")
+		logrus.Warnf("Windows does not support Block I/O write limit in bytes per second. --device-write-bps discarded.")
+		resources.BlkioDeviceWriteBps = []*pblkiodev.ThrottleDevice{}
+	}
+	if len(resources.BlkioDeviceReadIOps) > 0 {
+		warnings = append(warnings, "Windows does not support Block read limit in IO per second.")
+		logrus.Warnf("Windows does not support Block I/O read limit in IO per second. -device-read-iops discarded.")
+		resources.BlkioDeviceReadIOps = []*pblkiodev.ThrottleDevice{}
+	}
+	if len(resources.BlkioDeviceWriteIOps) > 0 {
+		warnings = append(warnings, "Windows does not support Block write limit in IO per second.")
+		logrus.Warnf("Windows does not support Block I/O write limit in IO per second. --device-write-iops discarded.")
+		resources.BlkioDeviceWriteIOps = []*pblkiodev.ThrottleDevice{}
+	}
+	return warnings, nil
+}
+
 // verifyPlatformContainerSettings performs platform-specific validation of the
 // hostconfig and config structures.
 func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.HostConfig, config *containertypes.Config, update bool) ([]string, error) {
-	return nil, nil
+	warnings := []string{}
+
+	w, err := verifyContainerResources(&hostConfig.Resources, nil)
+	warnings = append(warnings, w...)
+	if err != nil {
+		return warnings, err
+	}
+
+	return warnings, nil
 }
 
 // verifyDaemonSettings performs validation of daemon config struct
@@ -110,15 +165,12 @@ func verifyDaemonSettings(config *Config) error {
 func checkSystem() error {
 	// Validate the OS version. Note that docker.exe must be manifested for this
 	// call to return the correct version.
-	osv, err := system.GetOSVersion()
-	if err != nil {
-		return err
-	}
+	osv := system.GetOSVersion()
 	if osv.MajorVersion < 10 {
 		return fmt.Errorf("This version of Windows does not support the docker daemon")
 	}
-	if osv.Build < 10586 {
-		return fmt.Errorf("The Windows daemon requires Windows Server 2016 Technical Preview 4, build 10586 or later")
+	if osv.Build < 14300 {
+		return fmt.Errorf("The Windows daemon requires Windows Server 2016 Technical Preview 5 build 14300 or later")
 	}
 	return nil
 }
@@ -134,21 +186,6 @@ func configureMaxThreads(config *Config) error {
 }
 
 func (daemon *Daemon) initNetworkController(config *Config) (libnetwork.NetworkController, error) {
-	// TODO Windows: Remove this check once TP4 is no longer supported
-	osv, err := system.GetOSVersion()
-	if err != nil {
-		return nil, err
-	}
-
-	if osv.Build < 14260 {
-		// Set the name of the virtual switch if not specified by -b on daemon start
-		if config.bridgeConfig.Iface == "" {
-			config.bridgeConfig.Iface = defaultVirtualSwitch
-		}
-		logrus.Warnf("Network controller is not supported by the current platform build version")
-		return nil, nil
-	}
-
 	netOptions, err := daemon.networkOptions(config)
 	if err != nil {
 		return nil, err
@@ -364,8 +401,8 @@ func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) erro
 	}
 
 	// Convert imageData to valid image configuration
-	for i := range imageInfos {
-		name := strings.ToLower(imageInfos[i].Name)
+	for _, info := range imageInfos {
+		name := strings.ToLower(info.Name)
 
 		type registrar interface {
 			RegisterDiffID(graphID string, size int64) (layer.Layer, error)
@@ -374,13 +411,12 @@ func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) erro
 		if !ok {
 			return errors.New("Layerstore doesn't support RegisterDiffID")
 		}
-		if _, err := r.RegisterDiffID(imageInfos[i].ID, imageInfos[i].Size); err != nil {
+		if _, err := r.RegisterDiffID(info.ID, info.Size); err != nil {
 			return err
 		}
 		// layer is intentionally not released
 
-		rootFS := image.NewRootFS()
-		rootFS.BaseLayer = filepath.Base(imageInfos[i].Path)
+		rootFS := image.NewRootFSWithBaseLayer(filepath.Base(info.Path))
 
 		// Create history for base layer
 		config, err := json.Marshal(&image.Image{
@@ -388,10 +424,12 @@ func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) erro
 				DockerVersion: dockerversion.Version,
 				Architecture:  runtime.GOARCH,
 				OS:            runtime.GOOS,
-				Created:       imageInfos[i].CreatedTime,
+				Created:       info.CreatedTime,
 			},
-			RootFS:  rootFS,
-			History: []image.History{},
+			RootFS:     rootFS,
+			History:    []image.History{},
+			OSVersion:  info.OSVersion,
+			OSFeatures: info.OSFeatures,
 		})
 
 		named, err := reference.ParseNamed(name)
@@ -399,14 +437,16 @@ func restoreCustomImage(is image.Store, ls layer.Store, rs reference.Store) erro
 			return err
 		}
 
-		ref, err := reference.WithTag(named, imageInfos[i].Version)
+		ref, err := reference.WithTag(named, info.Version)
 		if err != nil {
 			return err
 		}
 
 		id, err := is.Create(config)
 		if err != nil {
-			return err
+			logrus.Warnf("Failed to restore custom image %s with error: %s.", name, err)
+			logrus.Warnf("Skipping image %s...", name)
+			continue
 		}
 
 		if err := rs.AddTag(ref, id, true); err != nil {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,16 +30,12 @@ import (
 	"github.com/docker/docker/errors"
 	"github.com/docker/engine-api/types"
 	containertypes "github.com/docker/engine-api/types/container"
-	eventtypes "github.com/docker/engine-api/types/events"
-	"github.com/docker/engine-api/types/filters"
 	networktypes "github.com/docker/engine-api/types/network"
 	registrytypes "github.com/docker/engine-api/types/registry"
 	"github.com/docker/engine-api/types/strslice"
 	// register graph drivers
 	_ "github.com/docker/docker/daemon/graphdriver/register"
-	"github.com/docker/docker/daemon/logger"
 	"github.com/docker/docker/daemon/network"
-	"github.com/docker/docker/distribution"
 	dmetadata "github.com/docker/docker/distribution/metadata"
 	"github.com/docker/docker/distribution/xfer"
 	"github.com/docker/docker/dockerversion"
@@ -140,6 +137,10 @@ type Daemon struct {
 //    unique enough to only return a single container object
 //  If none of these searches succeed, an error is returned
 func (daemon *Daemon) GetContainer(prefixOrName string) (*container.Container, error) {
+	if len(prefixOrName) == 0 {
+		return nil, errors.NewBadRequestError(fmt.Errorf("No container name or ID supplied"))
+	}
+
 	if containerByID := daemon.containers.Get(prefixOrName); containerByID != nil {
 		// prefix is an exact match to a full container ID
 		return containerByID, nil
@@ -292,8 +293,14 @@ func (daemon *Daemon) restore() error {
 		wg.Add(1)
 		go func(c *container.Container) {
 			defer wg.Done()
+			rm := c.RestartManager(false)
 			if c.IsRunning() || c.IsPaused() {
-				if err := daemon.containerd.Restore(c.ID, libcontainerd.WithRestartManager(c.RestartManager(true))); err != nil {
+				// Fix activityCount such that graph mounts can be unmounted later
+				if err := daemon.layerStore.ReinitRWLayer(c.RWLayer); err != nil {
+					logrus.Errorf("Failed to ReinitRWLayer for %s due to %s", c.ID, err)
+					return
+				}
+				if err := daemon.containerd.Restore(c.ID, libcontainerd.WithRestartManager(rm)); err != nil {
 					logrus.Errorf("Failed to restore with containerd: %q", err)
 					return
 				}
@@ -304,10 +311,6 @@ func (daemon *Daemon) restore() error {
 				mapLock.Lock()
 				restartContainers[c] = make(chan struct{})
 				mapLock.Unlock()
-			} else if !c.IsRunning() && !c.IsPaused() {
-				if mountid, err := daemon.layerStore.GetMountID(c.ID); err == nil {
-					daemon.cleanupMountsByID(mountid)
-				}
 			}
 
 			// if c.hostConfig.Links is nil (not just empty), then it is using the old sqlite links and needs to be migrated
@@ -531,6 +534,9 @@ func (daemon *Daemon) newContainer(name string, config *containertypes.Config, i
 
 // GetByName returns a container given a name.
 func (daemon *Daemon) GetByName(name string) (*container.Container, error) {
+	if len(name) == 0 {
+		return nil, fmt.Errorf("No container name supplied")
+	}
 	fullName := name
 	if name[0] != '/' {
 		fullName = "/" + name
@@ -544,18 +550,6 @@ func (daemon *Daemon) GetByName(name string) (*container.Container, error) {
 		return nil, fmt.Errorf("Could not find container for entity id %s", id)
 	}
 	return e, nil
-}
-
-// SubscribeToEvents returns the currently record of events, a channel to stream new events from, and a function to cancel the stream of events.
-func (daemon *Daemon) SubscribeToEvents(since, sinceNano int64, filter filters.Args) ([]eventtypes.Message, chan interface{}) {
-	ef := events.NewFilter(filter)
-	return daemon.EventsService.SubscribeTopic(since, sinceNano, ef)
-}
-
-// UnsubscribeFromEvents stops the event subscription for a client by closing the
-// channel where the daemon sends events to.
-func (daemon *Daemon) UnsubscribeFromEvents(listener chan interface{}) {
-	daemon.EventsService.Evict(listener)
 }
 
 // GetLabels for a container or image id
@@ -674,12 +668,6 @@ func NewDaemon(config *Config, registryService *registry.Service, containerdRemo
 		return nil, fmt.Errorf("error setting default isolation mode: %v", err)
 	}
 
-	// Verify logging driver type
-	if config.LogConfig.Type != "none" {
-		if _, err := logger.GetLogDriver(config.LogConfig.Type); err != nil {
-			return nil, fmt.Errorf("error finding the logging driver: %v", err)
-		}
-	}
 	logrus.Debugf("Using default logging driver %s", config.LogConfig.Type)
 
 	if err := configureMaxThreads(config); err != nil {
@@ -950,21 +938,6 @@ func (daemon *Daemon) changes(container *container.Container) ([]archive.Change,
 	return container.RWLayer.Changes()
 }
 
-// TagImage creates the tag specified by newTag, pointing to the image named
-// imageName (alternatively, imageName can also be an image ID).
-func (daemon *Daemon) TagImage(newTag reference.Named, imageName string) error {
-	imageID, err := daemon.GetImageID(imageName)
-	if err != nil {
-		return err
-	}
-	if err := daemon.referenceStore.AddTag(newTag, imageID, true); err != nil {
-		return err
-	}
-
-	daemon.LogImageEvent(imageID.String(), newTag.String(), "tag")
-	return nil
-}
-
 func writeDistributionProgress(cancelFunc func(), outStream io.Writer, progressChan <-chan progress.Progress) {
 	progressOutput := streamformatter.NewJSONStreamFormatter().NewProgressOutput(outStream, false)
 	operationCancelled := false
@@ -995,112 +968,14 @@ func isBrokenPipe(e error) bool {
 	return e == syscall.EPIPE
 }
 
-// PullImage initiates a pull operation. image is the repository name to pull, and
-// tag may be either empty, or indicate a specific tag to pull.
-func (daemon *Daemon) PullImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
-	// Include a buffer so that slow client connections don't affect
-	// transfer performance.
-	progressChan := make(chan progress.Progress, 100)
-
-	writesDone := make(chan struct{})
-
-	ctx, cancelFunc := context.WithCancel(ctx)
-
-	go func() {
-		writeDistributionProgress(cancelFunc, outStream, progressChan)
-		close(writesDone)
-	}()
-
-	imagePullConfig := &distribution.ImagePullConfig{
-		MetaHeaders:      metaHeaders,
-		AuthConfig:       authConfig,
-		ProgressOutput:   progress.ChanOutput(progressChan),
-		RegistryService:  daemon.RegistryService,
-		ImageEventLogger: daemon.LogImageEvent,
-		MetadataStore:    daemon.distributionMetadataStore,
-		ImageStore:       daemon.imageStore,
-		ReferenceStore:   daemon.referenceStore,
-		DownloadManager:  daemon.downloadManager,
-	}
-
-	err := distribution.Pull(ctx, ref, imagePullConfig)
-	close(progressChan)
-	<-writesDone
-	return err
-}
-
-// PullOnBuild tells Docker to pull image referenced by `name`.
-func (daemon *Daemon) PullOnBuild(ctx context.Context, name string, authConfigs map[string]types.AuthConfig, output io.Writer) (builder.Image, error) {
-	ref, err := reference.ParseNamed(name)
-	if err != nil {
-		return nil, err
-	}
-	ref = reference.WithDefaultTag(ref)
-
-	pullRegistryAuth := &types.AuthConfig{}
-	if len(authConfigs) > 0 {
-		// The request came with a full auth config file, we prefer to use that
-		repoInfo, err := daemon.RegistryService.ResolveRepository(ref)
-		if err != nil {
-			return nil, err
-		}
-
-		resolvedConfig := registry.ResolveAuthConfig(
-			authConfigs,
-			repoInfo.Index,
-		)
-		pullRegistryAuth = &resolvedConfig
-	}
-
-	if err := daemon.PullImage(ctx, ref, nil, pullRegistryAuth, output); err != nil {
-		return nil, err
-	}
-	return daemon.GetImage(name)
-}
-
 // ExportImage exports a list of images to the given output stream. The
 // exported images are archived into a tar when written to the output
 // stream. All images with the given tag and all versions containing
 // the same tag are exported. names is the set of tags to export, and
 // outStream is the writer which the images are written to.
 func (daemon *Daemon) ExportImage(names []string, outStream io.Writer) error {
-	imageExporter := tarexport.NewTarExporter(daemon.imageStore, daemon.layerStore, daemon.referenceStore)
+	imageExporter := tarexport.NewTarExporter(daemon.imageStore, daemon.layerStore, daemon.referenceStore, daemon)
 	return imageExporter.Save(names, outStream)
-}
-
-// PushImage initiates a push operation on the repository named localName.
-func (daemon *Daemon) PushImage(ctx context.Context, ref reference.Named, metaHeaders map[string][]string, authConfig *types.AuthConfig, outStream io.Writer) error {
-	// Include a buffer so that slow client connections don't affect
-	// transfer performance.
-	progressChan := make(chan progress.Progress, 100)
-
-	writesDone := make(chan struct{})
-
-	ctx, cancelFunc := context.WithCancel(ctx)
-
-	go func() {
-		writeDistributionProgress(cancelFunc, outStream, progressChan)
-		close(writesDone)
-	}()
-
-	imagePushConfig := &distribution.ImagePushConfig{
-		MetaHeaders:      metaHeaders,
-		AuthConfig:       authConfig,
-		ProgressOutput:   progress.ChanOutput(progressChan),
-		RegistryService:  daemon.RegistryService,
-		ImageEventLogger: daemon.LogImageEvent,
-		MetadataStore:    daemon.distributionMetadataStore,
-		LayerStore:       daemon.layerStore,
-		ImageStore:       daemon.imageStore,
-		ReferenceStore:   daemon.referenceStore,
-		TrustKey:         daemon.trustKey,
-		UploadManager:    daemon.uploadManager,
-	}
-
-	err := distribution.Push(ctx, ref, imagePushConfig)
-	close(progressChan)
-	<-writesDone
-	return err
 }
 
 // LookupImage looks up an image by name and returns it as an ImageInspect
@@ -1178,7 +1053,7 @@ func (daemon *Daemon) LookupImage(name string) (*types.ImageInspect, error) {
 // complement of ImageExport.  The input stream is an uncompressed tar
 // ball containing images and metadata.
 func (daemon *Daemon) LoadImage(inTar io.ReadCloser, outStream io.Writer, quiet bool) error {
-	imageExporter := tarexport.NewTarExporter(daemon.imageStore, daemon.layerStore, daemon.referenceStore)
+	imageExporter := tarexport.NewTarExporter(daemon.imageStore, daemon.layerStore, daemon.referenceStore, daemon)
 	return imageExporter.Load(inTar, outStream, quiet)
 }
 
@@ -1451,15 +1326,22 @@ func (daemon *Daemon) verifyContainerSettings(hostConfig *containertypes.HostCon
 				return nil, err
 			}
 		}
+
+		// Validate if the given hostname is RFC 1123 (https://tools.ietf.org/html/rfc1123) compliant.
+		if len(config.Hostname) > 0 {
+			// RFC1123 specifies that 63 bytes is the maximium length
+			// Windows has the limitation of 63 bytes in length
+			// Linux hostname is limited to HOST_NAME_MAX=64, not not including the terminating null byte.
+			// We limit the length to 63 bytes here to match RFC1035 and RFC1123.
+			matched, _ := regexp.MatchString("^(([[:alnum:]]|[[:alnum:]][[:alnum:]\\-]*[[:alnum:]])\\.)*([[:alnum:]]|[[:alnum:]][[:alnum:]\\-]*[[:alnum:]])$", config.Hostname)
+			if len(config.Hostname) > 63 || !matched {
+				return nil, fmt.Errorf("invalid hostname format: %s", config.Hostname)
+			}
+		}
 	}
 
 	if hostConfig == nil {
 		return nil, nil
-	}
-
-	logCfg := daemon.getLogConfig(hostConfig.LogConfig)
-	if err := logger.ValidateLogOpts(logCfg.Type, logCfg.Config); err != nil {
-		return nil, err
 	}
 
 	for port := range hostConfig.PortBindings {
@@ -1534,8 +1416,27 @@ func (daemon *Daemon) GetContainerStats(container *container.Container) (*types.
 	return stats, nil
 }
 
+// Resolve Network SandboxID in case the container reuse another container's network stack
+func (daemon *Daemon) getNetworkSandboxID(c *container.Container) (string, error) {
+	curr := c
+	for curr.HostConfig.NetworkMode.IsContainer() {
+		containerID := curr.HostConfig.NetworkMode.ConnectedContainer()
+		connected, err := daemon.GetContainer(containerID)
+		if err != nil {
+			return "", fmt.Errorf("Could not get container for %s", containerID)
+		}
+		curr = connected
+	}
+	return curr.NetworkSettings.SandboxID, nil
+}
+
 func (daemon *Daemon) getNetworkStats(c *container.Container) (map[string]types.NetworkStats, error) {
-	sb, err := daemon.netController.SandboxByID(c.NetworkSettings.SandboxID)
+	sandboxID, err := daemon.getNetworkSandboxID(c)
+	if err != nil {
+		return nil, err
+	}
+
+	sb, err := daemon.netController.SandboxByID(sandboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -1591,13 +1492,14 @@ func (daemon *Daemon) initDiscovery(config *Config) error {
 
 // Reload reads configuration changes and modifies the
 // daemon according to those changes.
-// This are the settings that Reload changes:
+// These are the settings that Reload changes:
 // - Daemon labels.
+// - Daemon debug log level.
 // - Cluster discovery (reconfigure and restart).
 func (daemon *Daemon) Reload(config *Config) error {
 	daemon.configStore.reloadLock.Lock()
 	defer daemon.configStore.reloadLock.Unlock()
-	if config.IsValueSet("label") {
+	if config.IsValueSet("labels") {
 		daemon.configStore.Labels = config.Labels
 	}
 	if config.IsValueSet("debug") {

@@ -27,6 +27,8 @@ export DOCKER_PKG='github.com/docker/docker'
 export SCRIPTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export MAKEDIR="$SCRIPTDIR/make"
 
+: ${TEST_REPEAT:=0}
+
 # We're a nice, sexy, little shell script, and people might try to run us;
 # but really, they shouldn't. We want to be in a container!
 inContainer="AssumeSoInitially"
@@ -64,7 +66,8 @@ DEFAULT_BUNDLES=(
 	validate-toml
 	validate-vet
 
-	binary
+	binary-client
+	binary-daemon
 	dynbinary
 
 	test-unit
@@ -77,7 +80,7 @@ DEFAULT_BUNDLES=(
 )
 
 VERSION=$(< ./VERSION)
-if command -v git &> /dev/null && git rev-parse &> /dev/null; then
+if command -v git &> /dev/null && [ -d .git ] && git rev-parse &> /dev/null; then
 	GITCOMMIT=$(git rev-parse --short HEAD)
 	if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 		GITCOMMIT="$GITCOMMIT-unsupported"
@@ -121,16 +124,14 @@ fi
 if [ "$DOCKER_EXPERIMENTAL" ]; then
 	echo >&2 '# WARNING! DOCKER_EXPERIMENTAL is set: building experimental features'
 	echo >&2
-	DOCKER_BUILDTAGS+=" experimental pkcs11"
+	DOCKER_BUILDTAGS+=" experimental"
 fi
 
-if [ -z "$DOCKER_CLIENTONLY" ]; then
-	DOCKER_BUILDTAGS+=" daemon"
-	if pkg-config 'libsystemd >= 209' 2> /dev/null ; then
-		DOCKER_BUILDTAGS+=" journald"
-	elif pkg-config 'libsystemd-journal' 2> /dev/null ; then
-		DOCKER_BUILDTAGS+=" journald journald_compat"
-	fi
+DOCKER_BUILDTAGS+=" daemon"
+if pkg-config 'libsystemd >= 209' 2> /dev/null ; then
+	DOCKER_BUILDTAGS+=" journald"
+elif pkg-config 'libsystemd-journal' 2> /dev/null ; then
+	DOCKER_BUILDTAGS+=" journald journald_compat"
 fi
 
 # test whether "btrfs/version.h" exists and apply btrfs_noversion appropriately
@@ -229,18 +230,29 @@ go_test_dir() {
 	dir=$1
 	coverpkg=$2
 	testcover=()
+	testcoverprofile=()
+	testbinary="$DEST/test.main"
 	if [ "$HAVE_GO_TEST_COVER" ]; then
 		# if our current go install has -cover, we want to use it :)
 		mkdir -p "$DEST/coverprofiles"
 		coverprofile="docker${dir#.}"
 		coverprofile="$ABS_DEST/coverprofiles/${coverprofile//\//-}"
-		testcover=( -cover -coverprofile "$coverprofile" $coverpkg )
+		testcover=( -test.cover )
+		testcoverprofile=( -test.coverprofile "$coverprofile" $coverpkg )
 	fi
 	(
 		echo '+ go test' $TESTFLAGS "${DOCKER_PKG}${dir#.}"
 		cd "$dir"
 		export DEST="$ABS_DEST" # we're in a subshell, so this is safe -- our integration-cli tests need DEST, and "cd" screws it up
-		test_env go test ${testcover[@]} -ldflags "$LDFLAGS" "${BUILDFLAGS[@]}" $TESTFLAGS
+		go test -c -o "$testbinary" ${testcover[@]} -ldflags "$LDFLAGS" "${BUILDFLAGS[@]}"
+		i=0
+		while ((++i)); do
+			test_env "$testbinary" ${testcoverprofile[@]} $TESTFLAGS
+			if [ $i -gt "$TEST_REPEAT" ]; then
+				break
+			fi
+			echo "Repeating test ($i)"
+		done
 	)
 }
 test_env() {
@@ -306,7 +318,7 @@ copy_containerd() {
 		if [ -x /usr/local/bin/docker-runc ]; then
 			echo "Copying nested executables into $dir"
 			for file in containerd containerd-shim containerd-ctr runc; do
-				cp "/usr/local/bin/docker-$file" "$dir/"
+				cp `which "docker-$file"` "$dir/"
 				if [ "$2" == "hash" ]; then
 					hash_files "$dir/docker-$file"
 				fi

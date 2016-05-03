@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"io"
+	"net/http/httputil"
 
 	"golang.org/x/net/context"
 
@@ -47,13 +48,14 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 		cli.configFile.DetachKeys = *detachKeys
 	}
 
+	container := cmd.Arg(0)
+
 	options := types.ContainerAttachOptions{
-		ContainerID: cmd.Arg(0),
-		Stream:      true,
-		Stdin:       !*noStdin && c.Config.OpenStdin,
-		Stdout:      true,
-		Stderr:      true,
-		DetachKeys:  cli.configFile.DetachKeys,
+		Stream:     true,
+		Stdin:      !*noStdin && c.Config.OpenStdin,
+		Stdout:     true,
+		Stderr:     true,
+		DetachKeys: cli.configFile.DetachKeys,
 	}
 
 	var in io.ReadCloser
@@ -62,13 +64,16 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 	}
 
 	if *proxy && !c.Config.Tty {
-		sigc := cli.forwardAllSignals(options.ContainerID)
+		sigc := cli.forwardAllSignals(container)
 		defer signal.StopCatch(sigc)
 	}
 
-	resp, err := cli.client.ContainerAttach(context.Background(), options)
-	if err != nil {
-		return err
+	resp, errAttach := cli.client.ContainerAttach(context.Background(), container, options)
+	if errAttach != nil && errAttach != httputil.ErrPersistEOF {
+		// ContainerAttach returns an ErrPersistEOF (connection closed)
+		// means server met an error and put it in Hijacked connection
+		// keep the error and read detailed error message from hijacked connection later
+		return errAttach
 	}
 	defer resp.Close()
 
@@ -90,7 +95,11 @@ func (cli *DockerCli) CmdAttach(args ...string) error {
 		return err
 	}
 
-	_, status, err := getExitCode(cli, options.ContainerID)
+	if errAttach != nil {
+		return errAttach
+	}
+
+	_, status, err := getExitCode(cli, container)
 	if err != nil {
 		return err
 	}

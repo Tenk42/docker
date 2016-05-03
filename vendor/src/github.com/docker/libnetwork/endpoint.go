@@ -446,7 +446,7 @@ func (ep *endpoint) sbJoin(sb *sandbox, options ...EndpointOption) error {
 		return err
 	}
 
-	if sb.needDefaultGW() {
+	if sb.needDefaultGW() && sb.getEndpointInGWNetwork() == nil {
 		return sb.setupDefaultGW()
 	}
 
@@ -477,9 +477,20 @@ func (ep *endpoint) sbJoin(sb *sandbox, options ...EndpointOption) error {
 					ep.Name(), ep.ID(), err)
 			}
 		}
+
+		if sb.resolver != nil {
+			sb.resolver.FlushExtServers()
+		}
 	}
 
-	return sb.clearDefaultGW()
+	if !sb.needDefaultGW() {
+		if err := sb.clearDefaultGW(); err != nil {
+			log.Warnf("Failure while disconnecting sandbox %s (%s) from gateway network: %v",
+				sb.ID(), sb.ContainerID(), err)
+		}
+	}
+
+	return nil
 }
 
 func (ep *endpoint) rename(name string) error {
@@ -546,6 +557,10 @@ func (ep *endpoint) Leave(sbox Sandbox, options ...EndpointOption) error {
 
 	sb.joinLeaveStart()
 	defer sb.joinLeaveEnd()
+
+	if sb.resolver != nil {
+		sb.resolver.FlushExtServers()
+	}
 
 	return ep.sbLeave(sb, false, options...)
 }
@@ -618,10 +633,7 @@ func (ep *endpoint) sbLeave(sb *sandbox, force bool, options ...EndpointOption) 
 	}
 
 	sb.deleteHostsEntries(n.getSvcRecords(ep))
-	if !sb.inDelete && sb.needDefaultGW() {
-		if sb.getEPwithoutGateway() == nil {
-			return fmt.Errorf("endpoint without GW expected, but not found")
-		}
+	if !sb.inDelete && sb.needDefaultGW() && sb.getEndpointInGWNetwork() == nil {
 		return sb.setupDefaultGW()
 	}
 
@@ -635,7 +647,14 @@ func (ep *endpoint) sbLeave(sb *sandbox, force bool, options ...EndpointOption) 
 		}
 	}
 
-	return sb.clearDefaultGW()
+	if !sb.needDefaultGW() {
+		if err := sb.clearDefaultGW(); err != nil {
+			log.Warnf("Failure while disconnecting sandbox %s (%s) from gateway network: %v",
+				sb.ID(), sb.ContainerID(), err)
+		}
+	}
+
+	return nil
 }
 
 func (n *network) validateForceDelete(locator string) error {

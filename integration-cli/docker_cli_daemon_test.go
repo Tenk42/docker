@@ -1,4 +1,4 @@
-// +build daemon,!windows
+// +build !windows
 
 package main
 
@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/pkg/integration/checker"
+	"github.com/docker/docker/pkg/mount"
 	"github.com/docker/go-units"
 	"github.com/docker/libnetwork/iptables"
 	"github.com/docker/libtrust"
@@ -148,6 +149,37 @@ func (s *DockerDaemonSuite) TestDaemonRestartUnlessStopped(c *check.C) {
 	// both running
 	testRun(map[string]bool{"top1": true, "top2": true}, "After second daemon restart: ")
 
+}
+
+func (s *DockerDaemonSuite) TestDaemonRestartOnFailure(c *check.C) {
+	err := s.d.StartWithBusybox()
+	c.Assert(err, check.IsNil)
+
+	out, err := s.d.Cmd("run", "-d", "--name", "test1", "--restart", "on-failure:3", "busybox:latest", "false")
+	c.Assert(err, check.IsNil, check.Commentf("run top1: %v", out))
+
+	// wait test1 to stop
+	hostArgs := []string{"--host", s.d.sock()}
+	err = waitInspectWithArgs("test1", "{{.State.Running}} {{.State.Restarting}}", "false false", 10*time.Second, hostArgs...)
+	c.Assert(err, checker.IsNil, check.Commentf("test1 should exit but not"))
+
+	// record last start time
+	out, err = s.d.Cmd("inspect", "-f={{.State.StartedAt}}", "test1")
+	c.Assert(err, checker.IsNil, check.Commentf("out: %v", out))
+	lastStartTime := out
+
+	err = s.d.Restart()
+	c.Assert(err, check.IsNil)
+
+	// test1 shouldn't restart at all
+	err = waitInspectWithArgs("test1", "{{.State.Running}} {{.State.Restarting}}", "false false", 0, hostArgs...)
+	c.Assert(err, checker.IsNil, check.Commentf("test1 should exit but not"))
+
+	// make sure test1 isn't restarted when daemon restart
+	// if "StartAt" time updates, means test1 was once restarted.
+	out, err = s.d.Cmd("inspect", "-f={{.State.StartedAt}}", "test1")
+	c.Assert(err, checker.IsNil, check.Commentf("out: %v", out))
+	c.Assert(out, checker.Equals, lastStartTime, check.Commentf("test1 shouldn't start after daemon restarts"))
 }
 
 func (s *DockerDaemonSuite) TestDaemonStartIptablesFalse(c *check.C) {
@@ -563,7 +595,7 @@ func (s *DockerDaemonSuite) TestDaemonExitOnFailure(c *check.C) {
 	//attempt to start daemon with incorrect flags (we know -b and --bip conflict)
 	if err := s.d.Start("--bridge", "nosuchbridge", "--bip", "1.1.1.1"); err != nil {
 		//verify we got the right error
-		if !strings.Contains(err.Error(), "Daemon exited and never started") {
+		if !strings.Contains(err.Error(), "Daemon exited") {
 			c.Fatalf("Expected daemon not to start, got %v", err)
 		}
 		// look in the log and make sure we got the message that daemon is shutting down
@@ -1501,25 +1533,54 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithSocketAsVolume(c *check.C) {
 	c.Assert(s.d.Restart(), check.IsNil)
 }
 
-func (s *DockerDaemonSuite) TestCleanupMountsAfterCrash(c *check.C) {
+// os.Kill should kill daemon ungracefully, leaving behind container mounts.
+// A subsequent daemon restart shoud clean up said mounts.
+func (s *DockerDaemonSuite) TestCleanupMountsAfterDaemonAndContainerKill(c *check.C) {
 	c.Assert(s.d.StartWithBusybox(), check.IsNil)
 
 	out, err := s.d.Cmd("run", "-d", "busybox", "top")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
 	id := strings.TrimSpace(out)
-	c.Assert(s.d.Kill(), check.IsNil)
+	c.Assert(s.d.cmd.Process.Signal(os.Kill), check.IsNil)
+	mountOut, err := ioutil.ReadFile("/proc/self/mountinfo")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
+
+	// container mounts should exist even after daemon has crashed.
+	comment := check.Commentf("%s should stay mounted from older daemon start:\nDaemon root repository %s\n%s", id, s.d.folder, mountOut)
+	c.Assert(strings.Contains(string(mountOut), id), check.Equals, true, comment)
 
 	// kill the container
 	runCmd := exec.Command(ctrBinary, "--address", "/var/run/docker/libcontainerd/docker-containerd.sock", "containers", "kill", id)
 	if out, ec, err := runCommandWithOutput(runCmd); err != nil {
-		c.Fatalf("Failed to run ctr, ExitCode: %d, err: '%v' output: '%s' cid: '%s'\n", ec, err, out, id)
+		c.Fatalf("Failed to run ctr, ExitCode: %d, err: %v output: %s id: %s\n", ec, err, out, id)
 	}
 
-	// Give time to containerd to process the command if we don't
-	// the exit event might be received after we do the inspect
+	// restart daemon.
+	if err := s.d.Restart(); err != nil {
+		c.Fatal(err)
+	}
+
+	// Now, container mounts should be gone.
+	mountOut, err = ioutil.ReadFile("/proc/self/mountinfo")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
+	comment = check.Commentf("%s is still mounted from older daemon start:\nDaemon root repository %s\n%s", id, s.d.folder, mountOut)
+	c.Assert(strings.Contains(string(mountOut), id), check.Equals, false, comment)
+}
+
+// os.Interrupt should perform a graceful daemon shutdown and hence cleanup mounts.
+func (s *DockerDaemonSuite) TestCleanupMountsAfterGracefulShutdown(c *check.C) {
+	c.Assert(s.d.StartWithBusybox(), check.IsNil)
+
+	out, err := s.d.Cmd("run", "-d", "busybox", "top")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
+	id := strings.TrimSpace(out)
+
+	// Send SIGINT and daemon should clean up
+	c.Assert(s.d.cmd.Process.Signal(os.Interrupt), check.IsNil)
+
+	// Wait a bit for the daemon to handle cleanups.
 	time.Sleep(3 * time.Second)
 
-	c.Assert(s.d.Start(), check.IsNil)
 	mountOut, err := ioutil.ReadFile("/proc/self/mountinfo")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
 
@@ -1553,6 +1614,35 @@ func (s *DockerDaemonSuite) TestRunContainerWithBridgeNone(c *check.C) {
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
 	c.Assert(out, check.Equals, fmt.Sprintf("%s", stdout),
 		check.Commentf("The network interfaces in container should be the same with host when --net=host when bridge network is disabled: %s", out))
+}
+
+// os.Kill should kill daemon ungracefully, leaving behind container mounts.
+// A subsequent daemon restart shoud clean up said mounts.
+func (s *DockerDaemonSuite) TestCleanupMountsAfterDaemonKill(c *check.C) {
+	testRequires(c, NotExperimentalDaemon)
+	c.Assert(s.d.StartWithBusybox(), check.IsNil)
+
+	out, err := s.d.Cmd("run", "-d", "busybox", "top")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
+	id := strings.TrimSpace(out)
+	c.Assert(s.d.cmd.Process.Signal(os.Kill), check.IsNil)
+	mountOut, err := ioutil.ReadFile("/proc/self/mountinfo")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
+
+	// container mounts should exist even after daemon has crashed.
+	comment := check.Commentf("%s should stay mounted from older daemon start:\nDaemon root repository %s\n%s", id, s.d.folder, mountOut)
+	c.Assert(strings.Contains(string(mountOut), id), check.Equals, true, comment)
+
+	// restart daemon.
+	if err := s.d.Restart(); err != nil {
+		c.Fatal(err)
+	}
+
+	// Now, container mounts should be gone.
+	mountOut, err = ioutil.ReadFile("/proc/self/mountinfo")
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", mountOut))
+	comment = check.Commentf("%s is still mounted from older daemon start:\nDaemon root repository %s\n%s", id, s.d.folder, mountOut)
+	c.Assert(strings.Contains(string(mountOut), id), check.Equals, false, comment)
 }
 
 func (s *DockerDaemonSuite) TestDaemonRestartWithContainerRunning(t *check.C) {
@@ -1658,17 +1748,21 @@ func (s *DockerDaemonSuite) TestDaemonRestartWithContainerWithRestartPolicyAlway
 }
 
 func (s *DockerDaemonSuite) TestDaemonWideLogConfig(c *check.C) {
-	if err := s.d.StartWithBusybox("--log-driver=json-file", "--log-opt=max-size=1k"); err != nil {
+	if err := s.d.StartWithBusybox("--log-opt=max-size=1k"); err != nil {
 		c.Fatal(err)
 	}
-	out, err := s.d.Cmd("run", "-d", "--name=logtest", "busybox", "top")
+	name := "logtest"
+	out, err := s.d.Cmd("run", "-d", "--log-opt=max-file=5", "--name", name, "busybox", "top")
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s, err: %v", out, err))
-	out, err = s.d.Cmd("inspect", "-f", "{{ .HostConfig.LogConfig.Config }}", "logtest")
+
+	out, err = s.d.Cmd("inspect", "-f", "{{ .HostConfig.LogConfig.Config }}", name)
 	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
-	cfg := strings.TrimSpace(out)
-	if cfg != "map[max-size:1k]" {
-		c.Fatalf("Unexpected log-opt: %s, expected map[max-size:1k]", cfg)
-	}
+	c.Assert(out, checker.Contains, "max-size:1k")
+	c.Assert(out, checker.Contains, "max-file:5")
+
+	out, err = s.d.Cmd("inspect", "-f", "{{ .HostConfig.LogConfig.Type }}", name)
+	c.Assert(err, check.IsNil, check.Commentf("Output: %s", out))
+	c.Assert(strings.TrimSpace(out), checker.Equals, "json-file")
 }
 
 func (s *DockerDaemonSuite) TestDaemonRestartWithPausedContainer(c *check.C) {
@@ -1820,32 +1914,30 @@ func (s *DockerDaemonSuite) TestBridgeIPIsExcludedFromAllocatorPool(c *check.C) 
 }
 
 // Test daemon for no space left on device error
-func (s *DockerDaemonSuite) TestDaemonNoSpaceleftOnDeviceError(c *check.C) {
+func (s *DockerDaemonSuite) TestDaemonNoSpaceLeftOnDeviceError(c *check.C) {
 	testRequires(c, SameHostDaemon, DaemonIsLinux, Network)
 
+	testDir, err := ioutil.TempDir("", "no-space-left-on-device-test")
+	c.Assert(err, checker.IsNil)
+	defer os.RemoveAll(testDir)
+	c.Assert(mount.MakeRShared(testDir), checker.IsNil)
+	defer mount.Unmount(testDir)
+	defer mount.Unmount(filepath.Join(testDir, "test-mount"))
+
 	// create a 2MiB image and mount it as graph root
-	cmd := exec.Command("dd", "of=/tmp/testfs.img", "bs=1M", "seek=2", "count=0")
-	if err := cmd.Run(); err != nil {
-		c.Fatalf("dd failed: %v", err)
-	}
-	cmd = exec.Command("mkfs.ext4", "-F", "/tmp/testfs.img")
-	if err := cmd.Run(); err != nil {
-		c.Fatalf("mkfs.ext4 failed: %v", err)
-	}
-	cmd = exec.Command("mkdir", "-p", "/tmp/testfs-mount")
-	if err := cmd.Run(); err != nil {
-		c.Fatalf("mkdir failed: %v", err)
-	}
-	cmd = exec.Command("mount", "-t", "ext4", "-no", "loop,rw", "/tmp/testfs.img", "/tmp/testfs-mount")
-	if err := cmd.Run(); err != nil {
-		c.Fatalf("mount failed: %v", err)
-	}
-	err := s.d.Start("--graph", "/tmp/testfs-mount")
+	// Why in a container? Because `mount` sometimes behaves weirdly and often fails outright on this test in debian:jessie (which is what the test suite runs under if run from the Makefile)
+	dockerCmd(c, "run", "--rm", "-v", testDir+":/test", "busybox", "sh", "-c", "dd of=/test/testfs.img bs=1M seek=2 count=0")
+	out, _, err := runCommandWithOutput(exec.Command("mkfs.ext4", "-F", filepath.Join(testDir, "testfs.img"))) // `mkfs.ext4` is not in busybox
+	c.Assert(err, checker.IsNil, check.Commentf(out))
+	dockerCmd(c, "run", "--privileged", "--rm", "-v", testDir+":/test:shared", "busybox", "sh", "-c", "mkdir -p /test/test-mount && mount -t ext4 -no loop,rw /test/testfs.img /test/test-mount")
+
+	err = s.d.Start("--graph", filepath.Join(testDir, "test-mount"))
 	c.Assert(err, check.IsNil)
 
 	// pull a repository large enough to fill the mount point
-	out, err := s.d.Cmd("pull", "registry:2")
-	c.Assert(out, checker.Contains, "no space left on device")
+	pullOut, err := s.d.Cmd("pull", "registry:2")
+	c.Assert(err, checker.NotNil, check.Commentf(pullOut))
+	c.Assert(pullOut, checker.Contains, "no space left on device")
 }
 
 // Test daemon restart with container links + auto restart
@@ -2129,6 +2221,6 @@ func (s *DockerSuite) TestDaemonDiscoveryBackendConfigReload(c *check.C) {
 
 	out, err := d.Cmd("info")
 	c.Assert(err, checker.IsNil)
-	c.Assert(out, checker.Contains, fmt.Sprintf("Cluster store: consul://consuladdr:consulport/some/path"))
-	c.Assert(out, checker.Contains, fmt.Sprintf("Cluster advertise: 192.168.56.100:0"))
+	c.Assert(out, checker.Contains, fmt.Sprintf("Cluster Store: consul://consuladdr:consulport/some/path"))
+	c.Assert(out, checker.Contains, fmt.Sprintf("Cluster Advertise: 192.168.56.100:0"))
 }

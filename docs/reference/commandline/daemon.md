@@ -21,13 +21,14 @@ weight = -1
       -b, --bridge=""                        Attach containers to a network bridge
       --bip=""                               Specify network bridge IP
       --cgroup-parent=                       Set parent cgroup for all containers
-      -D, --debug                            Enable debug mode
-      --default-gateway=""                   Container default gateway IPv4 address
-      --default-gateway-v6=""                Container default gateway IPv6 address
       --cluster-store=""                     URL of the distributed storage backend
       --cluster-advertise=""                 Address of the daemon instance on the cluster
       --cluster-store-opt=map[]              Set cluster options
       --config-file=/etc/docker/daemon.json  Daemon configuration file
+      --containerd                           Path to containerd socket
+      -D, --debug                            Enable debug mode
+      --default-gateway=""                   Container default gateway IPv4 address
+      --default-gateway-v6=""                Container default gateway IPv6 address
       --dns=[]                               DNS server to use
       --dns-opt=[]                           DNS options to use
       --dns-search=[]                        DNS search domains to use
@@ -194,17 +195,17 @@ options for `zfs` start with `zfs`.
      to create and manage the thin-pool volume. This volume is then handed to Docker
      to exclusively create snapshot volumes needed for images and containers.
 
-     Managing the thin-pool outside of Docker makes for the most feature-rich
+     Managing the thin-pool outside of Engine makes for the most feature-rich
      method of having Docker utilize device mapper thin provisioning as the
-     backing storage for Docker's containers. The highlights of the lvm-based
+     backing storage for Docker containers. The highlights of the lvm-based
      thin-pool management feature include: automatic or interactive thin-pool
      resize support, dynamically changing thin-pool features, automatic thinp
      metadata checking when lvm activates the thin-pool, etc.
 
-     As a fallback if no thin pool is provided, loopback files will be
+     As a fallback if no thin pool is provided, loopback files are
      created. Loopback is very slow, but can be used without any
      pre-configuration of storage. It is strongly recommended that you do
-     not use loopback in production. Ensure your Docker daemon has a
+     not use loopback in production. Ensure your Engine daemon has a
      `--storage-opt dm.thinpooldev` argument provided.
 
      Example use:
@@ -440,29 +441,33 @@ options for `zfs` start with `zfs`.
 
 *  `dm.min_free_space`
 
-    Specifies the min free space percent in thin pool require for new device
+    Specifies the min free space percent in a thin pool require for new device
     creation to succeed. This check applies to both free data space as well
     as free metadata space. Valid values are from 0% - 99%. Value 0% disables
-    free space checking logic. If user does not specify a value for this optoin,
-    then default value for this option is 10%.
+    free space checking logic. If user does not specify a value for this option,
+    the Engine uses a default value of 10%.
 
-    Whenever a new thin pool device is created (during docker pull or
-    during container creation), docker will check minimum free space is
-    available as specified by this parameter. If that is not the case, then
-    device creation will fail and docker operation will fail.
+    Whenever a new a thin pool device is created (during `docker pull` or during
+    container creation), the Engine checks if the minimum free space is
+    available. If sufficient space is unavailable, then device creation fails
+    and any relevant `docker` operation fails.
 
-    One will have to create more free space in thin pool to recover from the
-    error. Either delete some of the images and containers from thin pool and
-    create free space or add more storage to thin pool.
+    To recover from this error, you must create more free space in the thin pool
+    to recover from the error. You can create free space by deleting some images
+    and containers from the thin pool. You can also add more storage to the thin
+    pool.
 
-    For lvm thin pool, one can add more storage to volume group container thin
-    pool and that should automatically resolve it. If loop devices are being
-    used, then stop docker, grow the size of loop files and restart docker and
-    that should resolve the issue.
+    To add more space to a LVM (logical volume management) thin pool, just add
+    more storage to the volume group container thin pool; this should automatically
+    resolve any errors. If your configuration uses loop devices, then stop the
+    Engine daemon, grow the size of loop files and restart the daemon to resolve
+    the issue.
 
     Example use:
 
-        $ docker daemon --storage-opt dm.min_free_space_percent=10%
+    ```bash
+    $ docker daemon --storage-opt dm.min_free_space=10%
+    ```
 
 Currently supported options of `zfs`:
 
@@ -490,12 +495,13 @@ with the `--exec-opt` flag. All the flag's options have the `native` prefix. A
 single `native.cgroupdriver` option is available.
 
 The `native.cgroupdriver` option specifies the management of the container's
-cgroups. You can specify only specify `cgroupfs` at the moment.  If you omit the
+cgroups. You can specify only specify `cgroupfs` or `systemd`. If you specify
+`systemd` and it is not available, the system errors out. If you omit the
 `native.cgroupdriver` option,` cgroupfs` is used.
 
-This example explicitely sets the `cgroupdriver` to `cgroupfs`:
+This example sets the `cgroupdriver` to `systemd`:
 
-    $ sudo docker daemon --exec-opt native.cgroupdriver=cgroupfs
+    $ sudo docker daemon --exec-opt native.cgroupdriver=systemd
 
 Setting this option applies to all containers the daemon launches.
 
@@ -882,7 +888,7 @@ This is a full example of the allowed configuration options in the file:
 	"exec-opts": [],
 	"exec-root": "",
 	"storage-driver": "",
-	"storage-opts": "",
+	"storage-opts": [],
 	"labels": [],
 	"log-driver": "",
 	"log-opts": [],

@@ -22,6 +22,7 @@ import (
 	"github.com/Sirupsen/logrus"
 
 	"github.com/docker/docker/daemon/graphdriver"
+	"github.com/docker/docker/dockerversion"
 	"github.com/docker/docker/pkg/devicemapper"
 	"github.com/docker/docker/pkg/idtools"
 	"github.com/docker/docker/pkg/loopback"
@@ -166,6 +167,7 @@ type Status struct {
 	// thin pool and it can't be activated again.
 	DeferredDeleteEnabled      bool
 	DeferredDeletedDeviceCount uint
+	MinFreeSpace               uint64
 }
 
 // Structure used to export image/container metadata in docker inspect.
@@ -839,7 +841,7 @@ func (devices *DeviceSet) createRegisterDevice(hash string) (*devInfo, error) {
 	return info, nil
 }
 
-func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInfo) error {
+func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInfo, size uint64) error {
 	if err := devices.poolHasFreeSpace(); err != nil {
 		return err
 	}
@@ -878,7 +880,7 @@ func (devices *DeviceSet) createRegisterSnapDevice(hash string, baseInfo *devInf
 		break
 	}
 
-	if _, err := devices.registerDevice(deviceID, hash, baseInfo.Size, devices.OpenTransactionID); err != nil {
+	if _, err := devices.registerDevice(deviceID, hash, size, devices.OpenTransactionID); err != nil {
 		devicemapper.DeleteDevice(devices.getPoolDevName(), deviceID)
 		devices.markDeviceIDFree(deviceID)
 		logrus.Debugf("devmapper: Error registering device: %s", err)
@@ -1656,7 +1658,12 @@ func (devices *DeviceSet) initDevmapper(doInit bool) error {
 
 	// https://github.com/docker/docker/issues/4036
 	if supported := devicemapper.UdevSetSyncSupport(true); !supported {
-		logrus.Errorf("devmapper: Udev sync is not supported. This will lead to data loss and unexpected behavior. Install a dynamic binary to use devicemapper or select a different storage driver. For more information, see https://docs.docker.com/engine/reference/commandline/daemon/#daemon-storage-driver-option")
+		if dockerversion.IAmStatic == "true" {
+			logrus.Errorf("devmapper: Udev sync is not supported. This will lead to data loss and unexpected behavior. Install a dynamic binary to use devicemapper or select a different storage driver. For more information, see https://docs.docker.com/engine/reference/commandline/daemon/#daemon-storage-driver-option")
+		} else {
+			logrus.Errorf("devmapper: Udev sync is not supported. This will lead to data loss and unexpected behavior. Install a more recent version of libdevmapper or select a different storage driver. For more information, see https://docs.docker.com/engine/reference/commandline/daemon/#daemon-storage-driver-option")
+		}
+
 		if !devices.overrideUdevSyncCheck {
 			return graphdriver.ErrNotSupported
 		}
@@ -1830,7 +1837,7 @@ func (devices *DeviceSet) initDevmapper(doInit bool) error {
 }
 
 // AddDevice adds a device and registers in the hash.
-func (devices *DeviceSet) AddDevice(hash, baseHash string) error {
+func (devices *DeviceSet) AddDevice(hash, baseHash string, storageOpt map[string]string) error {
 	logrus.Debugf("devmapper: AddDevice(hash=%s basehash=%s)", hash, baseHash)
 	defer logrus.Debugf("devmapper: AddDevice(hash=%s basehash=%s) END", hash, baseHash)
 
@@ -1856,11 +1863,56 @@ func (devices *DeviceSet) AddDevice(hash, baseHash string) error {
 		return fmt.Errorf("devmapper: device %s already exists. Deleted=%v", hash, info.Deleted)
 	}
 
-	if err := devices.createRegisterSnapDevice(hash, baseInfo); err != nil {
+	size, err := devices.parseStorageOpt(storageOpt)
+	if err != nil {
 		return err
 	}
 
+	if size == 0 {
+		size = baseInfo.Size
+	}
+
+	if size < baseInfo.Size {
+		return fmt.Errorf("devmapper: Container size cannot be smaller than %s", units.HumanSize(float64(baseInfo.Size)))
+	}
+
+	if err := devices.createRegisterSnapDevice(hash, baseInfo, size); err != nil {
+		return err
+	}
+
+	// Grow the container rootfs.
+	if size > baseInfo.Size {
+		info, err := devices.lookupDevice(hash)
+		if err != nil {
+			return err
+		}
+
+		if err := devices.growFS(info); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+func (devices *DeviceSet) parseStorageOpt(storageOpt map[string]string) (uint64, error) {
+
+	// Read size to change the block device size per container.
+	for key, val := range storageOpt {
+		key := strings.ToLower(key)
+		switch key {
+		case "size":
+			size, err := units.RAMInBytes(val)
+			if err != nil {
+				return 0, err
+			}
+			return uint64(size), nil
+		default:
+			return 0, fmt.Errorf("Unknown option %s", key)
+		}
+	}
+
+	return 0, nil
 }
 
 func (devices *DeviceSet) markForDeferredDeletion(info *devInfo) error {
@@ -2418,6 +2470,9 @@ func (devices *DeviceSet) Status() *Status {
 				status.Metadata.Available = actualSpace
 			}
 		}
+
+		minFreeData := (dataTotal * uint64(devices.minFreeSpacePercent)) / 100
+		status.MinFreeSpace = minFreeData * blockSizeInSectors * 512
 	}
 
 	return status

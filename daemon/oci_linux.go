@@ -5,9 +5,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/Sirupsen/logrus"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/daemon/caps"
 	"github.com/docker/docker/libcontainerd"
@@ -29,19 +31,19 @@ func setResources(s *specs.Spec, r containertypes.Resources) error {
 	if err != nil {
 		return err
 	}
-	readBpsDevice, err := getBlkioReadBpsDevices(r)
+	readBpsDevice, err := getBlkioThrottleDevices(r.BlkioDeviceReadBps)
 	if err != nil {
 		return err
 	}
-	writeBpsDevice, err := getBlkioWriteBpsDevices(r)
+	writeBpsDevice, err := getBlkioThrottleDevices(r.BlkioDeviceWriteBps)
 	if err != nil {
 		return err
 	}
-	readIOpsDevice, err := getBlkioReadIOpsDevices(r)
+	readIOpsDevice, err := getBlkioThrottleDevices(r.BlkioDeviceReadIOps)
 	if err != nil {
 		return err
 	}
-	writeIOpsDevice, err := getBlkioWriteIOpsDevices(r)
+	writeIOpsDevice, err := getBlkioThrottleDevices(r.BlkioDeviceWriteIOps)
 	if err != nil {
 		return err
 	}
@@ -535,6 +537,8 @@ func setMounts(daemon *Daemon, s *specs.Spec, c *container.Container, mounts []c
 				}
 			}
 		}
+		s.Linux.ReadonlyPaths = nil
+		s.Linux.MaskedPaths = nil
 	}
 
 	// TODO: until a kernel/mount solution exists for handling remount in a user namespace,
@@ -583,16 +587,24 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 	}
 
 	var cgroupsPath string
+	scopePrefix := "docker"
+	parent := "/docker"
+	useSystemd := UsingSystemd(daemon.configStore)
+	if useSystemd {
+		parent = "system.slice"
+	}
+
 	if c.HostConfig.CgroupParent != "" {
-		cgroupsPath = filepath.Join(c.HostConfig.CgroupParent, c.ID)
+		parent = c.HostConfig.CgroupParent
+	} else if daemon.configStore.CgroupParent != "" {
+		parent = daemon.configStore.CgroupParent
+	}
+
+	if useSystemd {
+		cgroupsPath = parent + ":" + scopePrefix + ":" + c.ID
+		logrus.Debugf("createSpec: cgroupsPath: %s", cgroupsPath)
 	} else {
-		defaultCgroupParent := "/docker"
-		if daemon.configStore.CgroupParent != "" {
-			defaultCgroupParent = daemon.configStore.CgroupParent
-		} else if daemon.usingSystemd() {
-			defaultCgroupParent = "system.slice"
-		}
-		cgroupsPath = filepath.Join(defaultCgroupParent, c.ID)
+		cgroupsPath = filepath.Join(parent, c.ID)
 	}
 	s.Linux.CgroupsPath = &cgroupsPath
 
@@ -600,6 +612,7 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 		return nil, fmt.Errorf("linux runtime spec resources: %v", err)
 	}
 	s.Linux.Resources.OOMScoreAdj = &c.HostConfig.OomScoreAdj
+	s.Linux.Sysctl = c.HostConfig.Sysctls
 	if err := setDevices(&s, c); err != nil {
 		return nil, fmt.Errorf("linux runtime spec devices: %v", err)
 	}
@@ -623,13 +636,14 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 		return nil, err
 	}
 
-	mounts, err := daemon.setupMounts(c)
+	ms, err := daemon.setupMounts(c)
 	if err != nil {
 		return nil, err
 	}
-	mounts = append(mounts, c.IpcMounts()...)
-	mounts = append(mounts, c.TmpfsMounts()...)
-	if err := setMounts(daemon, &s, c, mounts); err != nil {
+	ms = append(ms, c.IpcMounts()...)
+	ms = append(ms, c.TmpfsMounts()...)
+	sort.Sort(mounts(ms))
+	if err := setMounts(daemon, &s, c, ms); err != nil {
 		return nil, fmt.Errorf("linux mounts: %v", err)
 	}
 
@@ -651,15 +665,16 @@ func (daemon *Daemon) createSpec(c *container.Container) (*libcontainerd.Spec, e
 
 	if apparmor.IsEnabled() {
 		appArmorProfile := "docker-default"
-		if c.HostConfig.Privileged {
-			appArmorProfile = "unconfined"
-		} else if len(c.AppArmorProfile) > 0 {
+		if len(c.AppArmorProfile) > 0 {
 			appArmorProfile = c.AppArmorProfile
+		} else if c.HostConfig.Privileged {
+			appArmorProfile = "unconfined"
 		}
 		s.Process.ApparmorProfile = appArmorProfile
 	}
 	s.Process.SelinuxLabel = c.GetProcessLabel()
 	s.Process.NoNewPrivileges = c.NoNewPrivileges
+	s.Linux.MountLabel = c.MountLabel
 
 	return (*libcontainerd.Spec)(&s), nil
 }

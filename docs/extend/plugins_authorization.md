@@ -49,6 +49,11 @@ Each plugin must reside within directories described under the
 **Note**: the abbreviations `AuthZ` and `AuthN` mean authorization and authentication
 respectively.
 
+## Default user authorization mechanism
+
+If TLS is enabled in the [Docker daemon](https://docs.docker.com/engine/security/https/), the default user authorization flow extracts the user details from the certificate subject name.
+That is, the `User` field is set to the client certificate subject common name, and the `AuthenticationMethod` field is set to `TLS`.
+
 ## Basic architecture
 
 You are responsible for registering your plugin as part of the Docker daemon
@@ -149,7 +154,7 @@ should implement the following two methods:
     "User":              "The user identification",
     "UserAuthNMethod":   "The authentication method used",
     "RequestMethod":     "The HTTP method",
-    "RequestUri":        "The HTTP request URI",
+    "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
     "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string ",
     "RequestStatusCode": "Request status code"
@@ -174,7 +179,7 @@ should implement the following two methods:
     "User":              "The user identification",
     "UserAuthNMethod":   "The authentication method used",
     "RequestMethod":     "The HTTP method",
-    "RequestUri":        "The HTTP request URI",
+    "RequestURI":        "The HTTP request URI",
     "RequestBody":       "Byte array containing the raw HTTP request body",
     "RequestHeader":     "Byte array containing the raw HTTP request header as a map[string][]string",
     "RequestStatusCode": "Request status code",
@@ -190,16 +195,9 @@ should implement the following two methods:
 {
    "Allow":              "Determined whether the user is allowed or not",
    "Msg":                "The authorization message",
-   "Err":                "The error message if things go wrong",
-   "ModifiedBody":       "Byte array containing a modified body of the raw HTTP body (or nil if no changes required)",
-   "ModifiedHeader":     "Byte array containing a modified header of the HTTP response (or nil if no changes required)",
-   "ModifiedStatusCode": "int containing the modified version of the status code (or 0 if not change is required)"
+   "Err":                "The error message if things go wrong"
 }
 ```
-
-The modified response enables the authorization plugin to manipulate the content
-of the HTTP response. In case of more than one plugin, each subsequent plugin
-receives a response (optionally) modified by a previous plugin.
 
 ### Request authorization
 

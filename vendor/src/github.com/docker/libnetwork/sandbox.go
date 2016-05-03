@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/docker/libnetwork/etchosts"
@@ -196,6 +197,10 @@ func (sb *sandbox) delete(force bool) error {
 	// Detach from all endpoints
 	retain := false
 	for _, ep := range sb.getConnectedEndpoints() {
+		// gw network endpoint detach and removal are automatic
+		if ep.endpointInGWNetwork() {
+			continue
+		}
 		// Retain the sanbdox if we can't obtain the network from store.
 		if _, err := c.getNetworkFromStore(ep.getNetwork().ID()); err != nil {
 			retain = true
@@ -536,6 +541,11 @@ func (sb *sandbox) resolveName(req string, networkName string, epList []*endpoin
 }
 
 func (sb *sandbox) SetKey(basePath string) error {
+	start := time.Now()
+	defer func() {
+		log.Debugf("sandbox set key processing took %s for container %s", time.Now().Sub(start), sb.ContainerID())
+	}()
+
 	if basePath == "" {
 		return types.BadRequestErrorf("invalid sandbox key")
 	}

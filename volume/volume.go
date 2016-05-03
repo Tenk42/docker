@@ -5,9 +5,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/docker/pkg/system"
 )
 
 // DefaultDriverName is the driver name used for the driver
@@ -41,6 +38,8 @@ type Volume interface {
 	Mount() (string, error)
 	// Unmount unmounts the volume when it is no longer in use.
 	Unmount() error
+	// Status returns low-level status information about a volume
+	Status() map[string]interface{}
 }
 
 // MountPoint is the intersection point between a volume and a container. It
@@ -79,8 +78,7 @@ func (m *MountPoint) Setup() (string, error) {
 				return "", err
 			}
 			if runtime.GOOS != "windows" { // Windows does not have deprecation issues here
-				logrus.Warnf("Auto-creating non-existent volume host path %s, this is deprecated and will be removed soon", m.Source)
-				if err := system.MkdirAll(m.Source, 0755); err != nil {
+				if err := os.MkdirAll(m.Source, 0755); err != nil {
 					return "", err
 				}
 			}

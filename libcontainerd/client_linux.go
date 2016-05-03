@@ -134,11 +134,11 @@ func (clnt *client) Create(containerID string, spec Spec, options ...CreateOptio
 	defer clnt.unlock(containerID)
 
 	if ctr, err := clnt.getContainer(containerID); err == nil {
-		if ctr.restarting { // docker doesn't actually call start if restart is on atm, but probably should in the future
+		if ctr.restarting {
 			ctr.restartManager.Cancel()
 			ctr.clean()
 		} else {
-			return fmt.Errorf("Container %s is aleady active", containerID)
+			return fmt.Errorf("Container %s is already active", containerID)
 		}
 	}
 
@@ -163,15 +163,9 @@ func (clnt *client) Create(containerID string, spec Spec, options ...CreateOptio
 		}
 	}()
 
-	// uid/gid
-	rootfsDir := filepath.Join(container.dir, "rootfs")
-	if err := idtools.MkdirAllAs(rootfsDir, 0700, uid, gid); err != nil && !os.IsExist(err) {
+	if err := idtools.MkdirAllAs(container.dir, 0700, uid, gid); err != nil && !os.IsExist(err) {
 		return err
 	}
-	if err := syscall.Mount(spec.Root.Path, rootfsDir, "bind", syscall.MS_REC|syscall.MS_BIND, ""); err != nil {
-		return err
-	}
-	spec.Root.Path = "rootfs"
 
 	f, err := os.Create(filepath.Join(container.dir, configFilename))
 	if err != nil {
@@ -258,21 +252,9 @@ func (clnt *client) Stats(containerID string) (*Stats, error) {
 	return (*Stats)(resp), nil
 }
 
-func (clnt *client) setExited(containerID string) error {
-	clnt.lock(containerID)
-	defer clnt.unlock(containerID)
-
-	var exitCode uint32
-	if event, ok := clnt.remote.pastEvents[containerID]; ok {
-		exitCode = event.Status
-		delete(clnt.remote.pastEvents, containerID)
-	}
-
-	err := clnt.backend.StateChanged(containerID, StateInfo{
-		State:    StateExit,
-		ExitCode: exitCode,
-	})
-
+// Take care of the old 1.11.0 behavior in case the version upgrade
+// happenned without a clean daemon shutdown
+func (clnt *client) cleanupOldRootfs(containerID string) {
 	// Unmount and delete the bundle folder
 	if mts, err := mount.GetMounts(); err == nil {
 		for _, mts := range mts {
@@ -284,6 +266,25 @@ func (clnt *client) setExited(containerID string) error {
 			}
 		}
 	}
+}
+
+func (clnt *client) setExited(containerID string) error {
+	clnt.lock(containerID)
+	defer clnt.unlock(containerID)
+
+	var exitCode uint32
+	if event, ok := clnt.remote.pastEvents[containerID]; ok {
+		exitCode = event.Status
+		delete(clnt.remote.pastEvents, containerID)
+	}
+
+	err := clnt.backend.StateChanged(containerID, StateInfo{
+		CommonStateInfo: CommonStateInfo{
+			State:    StateExit,
+			ExitCode: exitCode,
+		}})
+
+	clnt.cleanupOldRootfs(containerID)
 
 	return err
 }

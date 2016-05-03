@@ -46,11 +46,14 @@ import (
 	"github.com/docker/docker/pkg/stringid"
 
 	"github.com/opencontainers/runc/libcontainer/label"
+	rsystem "github.com/opencontainers/runc/libcontainer/system"
 )
 
 var (
 	// ErrAufsNotSupported is returned if aufs is not supported by the host.
 	ErrAufsNotSupported = fmt.Errorf("AUFS was not found in /proc/filesystems")
+	// ErrAufsNested means aufs cannot be used bc we are in a user namespace
+	ErrAufsNested       = fmt.Errorf("AUFS cannot be used in non-init user namespace")
 	incompatibleFsMagic = []graphdriver.FsMagic{
 		graphdriver.FsMagicBtrfs,
 		graphdriver.FsMagicAufs,
@@ -67,6 +70,7 @@ func init() {
 
 // Driver contains information about the filesystem mounted.
 type Driver struct {
+	sync.Mutex
 	root          string
 	uidMaps       []idtools.IDMap
 	gidMaps       []idtools.IDMap
@@ -145,6 +149,10 @@ func supportsAufs() error {
 	// proc/filesystems for when aufs is supported
 	exec.Command("modprobe", "aufs").Run()
 
+	if rsystem.RunningInUserNS() {
+		return ErrAufsNested
+	}
+
 	f, err := os.Open("/proc/filesystems")
 	if err != nil {
 		return err
@@ -193,9 +201,20 @@ func (a *Driver) Exists(id string) bool {
 	return true
 }
 
+// CreateReadWrite creates a layer that is writable for use as a container
+// file system.
+func (a *Driver) CreateReadWrite(id, parent, mountLabel string, storageOpt map[string]string) error {
+	return a.Create(id, parent, mountLabel, storageOpt)
+}
+
 // Create three folders for each id
 // mnt, layers, and diff
-func (a *Driver) Create(id, parent, mountLabel string) error {
+func (a *Driver) Create(id, parent, mountLabel string, storageOpt map[string]string) error {
+
+	if len(storageOpt) != 0 {
+		return fmt.Errorf("--storage-opt is not supported for aufs")
+	}
+
 	if err := a.createDirsFor(id); err != nil {
 		return err
 	}
@@ -418,6 +437,9 @@ func (a *Driver) getParentLayerPaths(id string) ([]string, error) {
 }
 
 func (a *Driver) mount(id string, target string, mountLabel string, layers []string) error {
+	a.Lock()
+	defer a.Unlock()
+
 	// If the id is mounted or we get an error return
 	if mounted, err := a.mounted(target); err != nil || mounted {
 		return err
@@ -432,6 +454,9 @@ func (a *Driver) mount(id string, target string, mountLabel string, layers []str
 }
 
 func (a *Driver) unmount(mountPath string) error {
+	a.Lock()
+	defer a.Unlock()
+
 	if mounted, err := a.mounted(mountPath); err != nil || !mounted {
 		return err
 	}

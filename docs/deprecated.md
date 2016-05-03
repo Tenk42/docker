@@ -48,7 +48,7 @@ defining it at container creation (`POST /containers/create`).
 
 **Deprecated In Release: [v1.10.0](https://github.com/docker/docker/releases/tag/v1.10.0)**
 
-**Target For Removal In Release: v1.12**
+**Removed In Release: v1.12**
 
 The `docker ps --before` and `docker ps --since` options are deprecated.
 Use `docker ps --filter=before=...` and `docker ps --filter=since=...` instead.
@@ -132,17 +132,6 @@ The following double-dash options are deprecated and have no replacement:
     docker ps --since-id
     docker ps --before-id
     docker search --trusted
-
-### Auto-creating missing host paths for bind mounts
-**Deprecated in Release: v1.9**
-
-**Target for Removal in Release: 1.11**
-
-When creating a container with a bind-mounted volume-- `docker run -v /host/path:/container/path` --
-docker was automatically creating the `/host/path` if it didn't already exist.
-
-This auto-creation of the host path is deprecated and docker will error out if
-the path does not exist.
 
 ### Interacting with V1 registries
 

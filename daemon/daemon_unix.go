@@ -27,6 +27,7 @@ import (
 	"github.com/docker/docker/runconfig"
 	runconfigopts "github.com/docker/docker/runconfig/opts"
 	"github.com/docker/engine-api/types"
+	"github.com/docker/engine-api/types/blkiodev"
 	pblkiodev "github.com/docker/engine-api/types/blkiodev"
 	containertypes "github.com/docker/engine-api/types/container"
 	"github.com/docker/libnetwork"
@@ -176,76 +177,22 @@ func parseSecurityOpt(container *container.Container, config *containertypes.Hos
 	return err
 }
 
-func getBlkioReadIOpsDevices(config containertypes.Resources) ([]specs.ThrottleDevice, error) {
-	var blkioReadIOpsDevice []specs.ThrottleDevice
+func getBlkioThrottleDevices(devs []*blkiodev.ThrottleDevice) ([]specs.ThrottleDevice, error) {
+	var throttleDevices []specs.ThrottleDevice
 	var stat syscall.Stat_t
 
-	for _, iopsDevice := range config.BlkioDeviceReadIOps {
-		if err := syscall.Stat(iopsDevice.Path, &stat); err != nil {
+	for _, d := range devs {
+		if err := syscall.Stat(d.Path, &stat); err != nil {
 			return nil, err
 		}
-		rate := iopsDevice.Rate
+		rate := d.Rate
 		d := specs.ThrottleDevice{Rate: &rate}
 		d.Major = int64(stat.Rdev / 256)
 		d.Minor = int64(stat.Rdev % 256)
-		blkioReadIOpsDevice = append(blkioReadIOpsDevice, d)
+		throttleDevices = append(throttleDevices, d)
 	}
 
-	return blkioReadIOpsDevice, nil
-}
-
-func getBlkioWriteIOpsDevices(config containertypes.Resources) ([]specs.ThrottleDevice, error) {
-	var blkioWriteIOpsDevice []specs.ThrottleDevice
-	var stat syscall.Stat_t
-
-	for _, iopsDevice := range config.BlkioDeviceWriteIOps {
-		if err := syscall.Stat(iopsDevice.Path, &stat); err != nil {
-			return nil, err
-		}
-		rate := iopsDevice.Rate
-		d := specs.ThrottleDevice{Rate: &rate}
-		d.Major = int64(stat.Rdev / 256)
-		d.Minor = int64(stat.Rdev % 256)
-		blkioWriteIOpsDevice = append(blkioWriteIOpsDevice, d)
-	}
-
-	return blkioWriteIOpsDevice, nil
-}
-
-func getBlkioReadBpsDevices(config containertypes.Resources) ([]specs.ThrottleDevice, error) {
-	var blkioReadBpsDevice []specs.ThrottleDevice
-	var stat syscall.Stat_t
-
-	for _, bpsDevice := range config.BlkioDeviceReadBps {
-		if err := syscall.Stat(bpsDevice.Path, &stat); err != nil {
-			return nil, err
-		}
-		rate := bpsDevice.Rate
-		d := specs.ThrottleDevice{Rate: &rate}
-		d.Major = int64(stat.Rdev / 256)
-		d.Minor = int64(stat.Rdev % 256)
-		blkioReadBpsDevice = append(blkioReadBpsDevice, d)
-	}
-
-	return blkioReadBpsDevice, nil
-}
-
-func getBlkioWriteBpsDevices(config containertypes.Resources) ([]specs.ThrottleDevice, error) {
-	var blkioWriteBpsDevice []specs.ThrottleDevice
-	var stat syscall.Stat_t
-
-	for _, bpsDevice := range config.BlkioDeviceWriteBps {
-		if err := syscall.Stat(bpsDevice.Path, &stat); err != nil {
-			return nil, err
-		}
-		rate := bpsDevice.Rate
-		d := specs.ThrottleDevice{Rate: &rate}
-		d.Major = int64(stat.Rdev / 256)
-		d.Minor = int64(stat.Rdev % 256)
-		blkioWriteBpsDevice = append(blkioWriteBpsDevice, d)
-	}
-
-	return blkioWriteBpsDevice, nil
+	return throttleDevices, nil
 }
 
 func checkKernelVersion(k, major, minor int) bool {
@@ -267,10 +214,12 @@ func checkKernel() error {
 	// without actually causing a kernel panic, so we need this workaround until
 	// the circumstances of pre-3.10 crashes are clearer.
 	// For details see https://github.com/docker/docker/issues/407
+	// Docker 1.11 and above doesn't actually run on kernels older than 3.4,
+	// due to containerd-shim usage of PR_SET_CHILD_SUBREAPER (introduced in 3.4).
 	if !checkKernelVersion(3, 10, 0) {
 		v, _ := kernel.GetKernelVersion()
 		if os.Getenv("DOCKER_NOWARN_KERNEL_VERSION") == "" {
-			logrus.Warnf("Your Linux kernel version %s can be unstable running docker. Please upgrade your kernel to 3.10.0.", v.String())
+			logrus.Fatalf("Your Linux kernel version %s is not supported for running docker. Please upgrade your kernel to 3.10.0 or newer.", v.String())
 		}
 	}
 	return nil
@@ -355,6 +304,9 @@ func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysi
 		logrus.Warnf("Your kernel does not support memory soft limit capabilities. Limitation discarded.")
 		resources.MemoryReservation = 0
 	}
+	if resources.MemoryReservation > 0 && resources.MemoryReservation < linuxMinMemory {
+		return warnings, fmt.Errorf("Minimum memory reservation allowed is 4MB")
+	}
 	if resources.Memory > 0 && resources.MemoryReservation > 0 && resources.Memory < resources.MemoryReservation {
 		return warnings, fmt.Errorf("Minimum memory limit should be larger than memory reservation limit, see usage")
 	}
@@ -397,7 +349,7 @@ func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysi
 		logrus.Warnf("Your kernel does not support CPU cfs period. Period discarded.")
 		resources.CPUPeriod = 0
 	}
-	if resources.CPUPeriod > 0 && (resources.CPUPeriod < 1000 || resources.CPUQuota > 1000000) {
+	if resources.CPUPeriod != 0 && (resources.CPUPeriod < 1000 || resources.CPUPeriod > 1000000) {
 		return warnings, fmt.Errorf("CPU cfs period can not be less than 1ms (i.e. 1000) or larger than 1s (i.e. 1000000)")
 	}
 	if resources.CPUQuota > 0 && !sysInfo.CPUCfsQuota {
@@ -407,6 +359,11 @@ func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysi
 	}
 	if resources.CPUQuota > 0 && resources.CPUQuota < 1000 {
 		return warnings, fmt.Errorf("CPU cfs quota can not be less than 1ms (i.e. 1000)")
+	}
+	if resources.CPUPercent > 0 {
+		warnings = append(warnings, "%s does not support CPU percent. Percent discarded.", runtime.GOOS)
+		logrus.Warnf("%s does not support CPU percent. Percent discarded.", runtime.GOOS)
+		resources.CPUPercent = 0
 	}
 
 	// cpuset subsystem checks and adjustments
@@ -440,6 +397,9 @@ func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysi
 	if resources.BlkioWeight > 0 && (resources.BlkioWeight < 10 || resources.BlkioWeight > 1000) {
 		return warnings, fmt.Errorf("Range of blkio weight is from 10 to 1000")
 	}
+	if resources.IOMaximumBandwidth != 0 || resources.IOMaximumIOps != 0 {
+		return warnings, fmt.Errorf("Invalid QoS settings: %s does not support Maximum IO Bandwidth or Maximum IO IOps", runtime.GOOS)
+	}
 	if len(resources.BlkioWeightDevice) > 0 && !sysInfo.BlkioWeightDevice {
 		warnings = append(warnings, "Your kernel does not support Block I/O weight_device.")
 		logrus.Warnf("Your kernel does not support Block I/O weight_device. Weight-device discarded.")
@@ -472,28 +432,36 @@ func verifyContainerResources(resources *containertypes.Resources, sysInfo *sysi
 func (daemon *Daemon) getCgroupDriver() string {
 	cgroupDriver := cgroupFsDriver
 
-	// No other cgroup drivers are supported at the moment. Warn the
-	// user if they tried to set one other than cgroupfs
-	for _, option := range daemon.configStore.ExecOptions {
+	if UsingSystemd(daemon.configStore) {
+		cgroupDriver = cgroupSystemdDriver
+	}
+	return cgroupDriver
+}
+
+// getCD gets the raw value of the native.cgroupdriver option, if set.
+func getCD(config *Config) string {
+	for _, option := range config.ExecOptions {
 		key, val, err := parsers.ParseKeyValueOpt(option)
 		if err != nil || !strings.EqualFold(key, "native.cgroupdriver") {
 			continue
 		}
-		if val != cgroupFsDriver {
-			logrus.Warnf("cgroupdriver '%s' is not supported", val)
-		}
+		return val
 	}
-
-	return cgroupDriver
+	return ""
 }
 
-func usingSystemd(config *Config) bool {
-	// No support for systemd cgroup atm
-	return false
+// VerifyCgroupDriver validates native.cgroupdriver
+func VerifyCgroupDriver(config *Config) error {
+	cd := getCD(config)
+	if cd == "" || cd == cgroupFsDriver || cd == cgroupSystemdDriver {
+		return nil
+	}
+	return fmt.Errorf("native.cgroupdriver option %s not supported", cd)
 }
 
-func (daemon *Daemon) usingSystemd() bool {
-	return daemon.getCgroupDriver() == cgroupSystemdDriver
+// UsingSystemd returns true if cli option includes native.cgroupdriver=systemd
+func UsingSystemd(config *Config) bool {
+	return getCD(config) == cgroupSystemdDriver
 }
 
 // verifyPlatformContainerSettings performs platform-specific validation of the
@@ -514,7 +482,7 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
 	warnings = append(warnings, w...)
 
 	if hostConfig.ShmSize < 0 {
-		return warnings, fmt.Errorf("SHM size must be greater then 0")
+		return warnings, fmt.Errorf("SHM size must be greater than 0")
 	}
 
 	if hostConfig.OomScoreAdj < -1000 || hostConfig.OomScoreAdj > 1000 {
@@ -539,7 +507,7 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
 			return warnings, fmt.Errorf("Cannot use the --read-only option when user namespaces are enabled")
 		}
 	}
-	if hostConfig.CgroupParent != "" && daemon.usingSystemd() {
+	if hostConfig.CgroupParent != "" && UsingSystemd(daemon.configStore) {
 		// CgroupParent for systemd cgroup should be named as "xxx.slice"
 		if len(hostConfig.CgroupParent) <= 6 || !strings.HasSuffix(hostConfig.CgroupParent, ".slice") {
 			return warnings, fmt.Errorf("cgroup-parent for systemd cgroup should be a valid slice named as \"xxx.slice\"")
@@ -560,7 +528,10 @@ func verifyDaemonSettings(config *Config) error {
 	if !config.bridgeConfig.EnableIPTables && config.bridgeConfig.EnableIPMasq {
 		config.bridgeConfig.EnableIPMasq = false
 	}
-	if config.CgroupParent != "" && usingSystemd(config) {
+	if err := VerifyCgroupDriver(config); err != nil {
+		return err
+	}
+	if config.CgroupParent != "" && UsingSystemd(config) {
 		if len(config.CgroupParent) <= 6 || !strings.HasSuffix(config.CgroupParent, ".slice") {
 			return fmt.Errorf("cgroup-parent for systemd cgroup should be a valid slice named as \"xxx.slice\"")
 		}
@@ -1087,6 +1058,11 @@ func (daemon *Daemon) stats(c *container.Container) (*types.StatsJSON, error) {
 			MaxUsage: mem.MaxUsage,
 			Stats:    cgs.MemoryStats.Stats,
 			Failcnt:  mem.Failcnt,
+			Limit:    mem.Limit,
+		}
+		// if the container does not set memory limit, use the machineMemory
+		if mem.Limit > daemon.statsCollector.machineMemory && daemon.statsCollector.machineMemory > 0 {
+			s.MemoryStats.Limit = daemon.statsCollector.machineMemory
 		}
 		if cgs.PidsStats != nil {
 			s.PidsStats = types.PidsStats{

@@ -77,7 +77,6 @@ func (cli *DockerCli) CmdNetworkCreate(args ...string) error {
 
 	// Construct network create request body
 	nc := types.NetworkCreate{
-		Name:           cmd.Arg(0),
 		Driver:         driver,
 		IPAM:           network.IPAM{Driver: *flIpamDriver, Config: ipamCfg, Options: flIpamOpt.GetAll()},
 		Options:        flOpts.GetAll(),
@@ -87,7 +86,7 @@ func (cli *DockerCli) CmdNetworkCreate(args ...string) error {
 		Labels:         runconfigopts.ConvertKVStringsToMap(flLabels.GetAll()),
 	}
 
-	resp, err := cli.client.NetworkCreate(context.Background(), nc)
+	resp, err := cli.client.NetworkCreate(context.Background(), cmd.Arg(0), nc)
 	if err != nil {
 		return err
 	}
@@ -372,19 +371,19 @@ func subnetMatches(subnet, data string) (bool, error) {
 }
 
 func networkUsage() string {
-	networkCommands := map[string]string{
-		"create":     "Create a network",
-		"connect":    "Connect container to a network",
-		"disconnect": "Disconnect container from a network",
-		"inspect":    "Display detailed network information",
-		"ls":         "List all networks",
-		"rm":         "Remove a network",
+	networkCommands := [][]string{
+		{"create", "Create a network"},
+		{"connect", "Connect container to a network"},
+		{"disconnect", "Disconnect container from a network"},
+		{"inspect", "Display detailed network information"},
+		{"ls", "List all networks"},
+		{"rm", "Remove a network"},
 	}
 
 	help := "Commands:\n"
 
-	for cmd, description := range networkCommands {
-		help += fmt.Sprintf("  %-25.25s%s\n", cmd, description)
+	for _, cmd := range networkCommands {
+		help += fmt.Sprintf("  %-25.25s%s\n", cmd[0], cmd[1])
 	}
 
 	help += fmt.Sprintf("\nRun 'docker network COMMAND --help' for more information on a command.")

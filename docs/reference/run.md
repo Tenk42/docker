@@ -291,7 +291,8 @@ you can override this with `--dns`.
 
 By default, the MAC address is generated using the IP address allocated to the
 container. You can set the container's MAC address explicitly by providing a
-MAC address via the `--mac-address` parameter (format:`12:34:56:78:9a:bc`).
+MAC address via the `--mac-address` parameter (format:`12:34:56:78:9a:bc`).Be
+aware that Docker does not check if manually specified MAC addresses are unique.
 
 Supported networks :
 
@@ -562,20 +563,18 @@ the exit codes follow the `chroot` standard, see below:
 **_126_** if the **_contained command_** cannot be invoked
 
     $ docker run busybox /etc; echo $?
-    # exec: "/etc": permission denied
-      docker: Error response from daemon: Contained command could not be invoked
+    # docker: Error response from daemon: Container command '/etc' could not be invoked.
       126
 
 **_127_** if the **_contained command_** cannot be found
 
     $ docker run busybox foo; echo $?
-    # exec: "foo": executable file not found in $PATH
-      docker: Error response from daemon: Contained command not found or does not exist
+    # docker: Error response from daemon: Container command 'foo' not found or does not exist.
       127
 
 **_Exit code_** of **_contained command_** otherwise
 
-    $ docker run busybox /bin/sh -c 'exit 3'
+    $ docker run busybox /bin/sh -c 'exit 3'; echo $?
     # 3
 
 ## Clean up (--rm)
@@ -608,8 +607,8 @@ with the same logic -- if the original volume was specified with a name it will 
                                          to the container
     --security-opt="no-new-privileges" : Disable container processes from gaining
                                          new privileges
-    --security-opt="seccomp:unconfined": Turn off seccomp confinement for the container
-    --security-opt="seccomp:profile.json: White listed syscalls seccomp Json file to be used as a seccomp filter
+    --security-opt="seccomp=unconfined": Turn off seccomp confinement for the container
+    --security-opt="seccomp=profile.json: White listed syscalls seccomp Json file to be used as a seccomp filter
 
 
 You can override the default labeling scheme for each container by specifying
@@ -849,7 +848,7 @@ limit and "K" the kernel limit. There are three possible ways to set limits:
         deployments where the total amount of memory per-cgroup is overcommitted.
         Overcommitting kernel memory limits is definitely not recommended, since the
         box can still run out of non-reclaimable memory.
-        In this case, the you can configure K so that the sum of all groups is
+        In this case, you can configure K so that the sum of all groups is
         never greater than the total memory. Then, freely set U at the expense of
         the system's service quality.
       </td>
@@ -1056,7 +1055,7 @@ Both flags take limits in the `<device-path>:<limit>` format. Both read and
 write rates must be a positive integer.
 
 ## Additional groups
-    --group-add: Add Linux capabilities
+    --group-add: Add additional groups to run as 
 
 By default, the docker container process runs with the supplementary groups looked
 up for the specified user. If one wants to add more to that list of groups, then
@@ -1084,7 +1083,7 @@ By default, Docker containers are "unprivileged" and cannot, for
 example, run a Docker daemon inside a Docker container. This is because
 by default a container is not allowed to access any devices, but a
 "privileged" container is given access to all devices (see
-the documentation on [cgroups devices](https://www.kernel.org/doc/Documentation/cgroups/devices.txt)).
+the documentation on [cgroups devices](https://www.kernel.org/doc/Documentation/cgroup-v1/devices.txt)).
 
 When the operator executes `docker run --privileged`, Docker will enable
 to access to all devices on the host as well as set some configuration
@@ -1413,9 +1412,6 @@ The example below mounts an empty tmpfs into the container with the `rw`,
     for bind-mounted volumes.
 
     --volumes-from="": Mount all volumes from the given container(s)
-
-> **Note**:
-> The auto-creation of the host path has been [*deprecated*](../deprecated.md#auto-creating-missing-host-paths-for-bind-mounts).
 
 > **Note**:
 > When using systemd to manage the Docker daemon's start and stop, in the systemd

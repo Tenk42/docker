@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Microsoft/hcsshim"
 	"github.com/Sirupsen/logrus"
@@ -34,11 +35,30 @@ func (ctr *container) newProcess(friendlyName string) *process {
 func (ctr *container) start() error {
 	var err error
 
-	// Start the container
+	// Start the container.  If this is a servicing container, this call will block
+	// until the container is done with the servicing execution.
 	logrus.Debugln("Starting container ", ctr.containerID)
 	if err = hcsshim.StartComputeSystem(ctr.containerID); err != nil {
 		logrus.Errorf("Failed to start compute system: %s", err)
 		return err
+	}
+
+	for _, option := range ctr.options {
+		if s, ok := option.(*ServicingOption); ok && s.IsServicing {
+			// Since the servicing operation is complete when StartCommputeSystem returns without error,
+			// we can shutdown (which triggers merge) and exit early.
+			const shutdownTimeout = 5 * 60 * 1000  // 4 minutes
+			const terminateTimeout = 1 * 60 * 1000 // 1 minute
+			if err := hcsshim.ShutdownComputeSystem(ctr.containerID, shutdownTimeout, ""); err != nil {
+				logrus.Errorf("Failed during cleanup of servicing container: %s", err)
+				// Terminate the container, ignoring errors.
+				if err2 := hcsshim.TerminateComputeSystem(ctr.containerID, terminateTimeout, ""); err2 != nil {
+					logrus.Errorf("Failed to terminate container %s after shutdown failure: %q", ctr.containerID, err2)
+				}
+				return err
+			}
+			return nil
+		}
 	}
 
 	createProcessParms := hcsshim.CreateProcessParams{
@@ -78,6 +98,7 @@ func (ctr *container) start() error {
 		}
 		return err
 	}
+	ctr.startedAt = time.Now()
 
 	// Convert io.ReadClosers to io.Readers
 	if stdout != nil {
@@ -103,9 +124,10 @@ func (ctr *container) start() error {
 
 	// Tell the docker engine that the container has started.
 	si := StateInfo{
-		State: StateStart,
-		Pid:   ctr.systemPid, // Not sure this is needed? Double-check monitor.go in daemon BUGBUG @jhowardmsft
-	}
+		CommonStateInfo: CommonStateInfo{
+			State: StateStart,
+			Pid:   ctr.systemPid, // Not sure this is needed? Double-check monitor.go in daemon BUGBUG @jhowardmsft
+		}}
 	return ctr.client.backend.StateChanged(ctr.containerID, si)
 
 }
@@ -129,10 +151,13 @@ func (ctr *container) waitExit(pid uint32, processFriendlyName string, isFirstPr
 
 	// Assume the container has exited
 	si := StateInfo{
-		State:     StateExit,
-		ExitCode:  uint32(exitCode),
-		Pid:       pid,
-		ProcessID: processFriendlyName,
+		CommonStateInfo: CommonStateInfo{
+			State:     StateExit,
+			ExitCode:  uint32(exitCode),
+			Pid:       pid,
+			ProcessID: processFriendlyName,
+		},
+		UpdatePending: false,
 	}
 
 	// But it could have been an exec'd process which exited
@@ -143,6 +168,14 @@ func (ctr *container) waitExit(pid uint32, processFriendlyName string, isFirstPr
 	// If this is the init process, always call into vmcompute.dll to
 	// shutdown the container after we have completed.
 	if isFirstProcessToStart {
+		propertyCheckFlag := 1 // Include update pending check.
+		csProperties, err := hcsshim.GetComputeSystemProperties(ctr.containerID, uint32(propertyCheckFlag))
+		if err != nil {
+			logrus.Warnf("GetComputeSystemProperties failed (container may have been killed): %s", err)
+		} else {
+			si.UpdatePending = csProperties.AreUpdatesPending
+		}
+
 		logrus.Debugf("Shutting down container %s", ctr.containerID)
 		// Explicit timeout here rather than hcsshim.TimeoutInfinte to avoid a
 		// (remote) possibility that ShutdownComputeSystem hangs indefinitely.
@@ -158,13 +191,8 @@ func (ctr *container) waitExit(pid uint32, processFriendlyName string, isFirstPr
 			logrus.Debugf("Completed shutting down container %s", ctr.containerID)
 		}
 
-		// BUGBUG - Is taking the lock necessary here? Should it just be taken for
-		// the deleteContainer call, not for the restart logic? @jhowardmsft
-		ctr.client.lock(ctr.containerID)
-		defer ctr.client.unlock(ctr.containerID)
-
 		if si.State == StateExit && ctr.restartManager != nil {
-			restart, wait, err := ctr.restartManager.ShouldRestart(uint32(exitCode))
+			restart, wait, err := ctr.restartManager.ShouldRestart(uint32(exitCode), false, time.Since(ctr.startedAt))
 			if err != nil {
 				logrus.Error(err)
 			} else if restart {
@@ -173,6 +201,7 @@ func (ctr *container) waitExit(pid uint32, processFriendlyName string, isFirstPr
 				go func() {
 					err := <-wait
 					ctr.restarting = false
+					ctr.client.deleteContainer(ctr.friendlyName)
 					if err != nil {
 						si.State = StateExit
 						if err := ctr.client.backend.StateChanged(ctr.containerID, si); err != nil {
