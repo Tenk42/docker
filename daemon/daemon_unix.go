@@ -33,8 +33,8 @@ import (
 	"github.com/docker/libnetwork"
 	nwconfig "github.com/docker/libnetwork/config"
 	"github.com/docker/libnetwork/drivers/bridge"
-	"github.com/docker/libnetwork/ipamutils"
 	"github.com/docker/libnetwork/netlabel"
+	"github.com/docker/libnetwork/netutils"
 	"github.com/docker/libnetwork/options"
 	lntypes "github.com/docker/libnetwork/types"
 	"github.com/opencontainers/runc/libcontainer/label"
@@ -488,7 +488,9 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
 	if hostConfig.OomScoreAdj < -1000 || hostConfig.OomScoreAdj > 1000 {
 		return warnings, fmt.Errorf("Invalid value %d, range for oom score adj is [-1000, 1000]", hostConfig.OomScoreAdj)
 	}
-	if sysInfo.IPv4ForwardingDisabled {
+
+	// ip-forwarding does not affect container with '--net=host' (or '--net=none')
+	if sysInfo.IPv4ForwardingDisabled && !(hostConfig.NetworkMode.IsHost() || hostConfig.NetworkMode.IsNone()) {
 		warnings = append(warnings, "IPv4 forwarding is disabled. Networking will not work.")
 		logrus.Warnf("IPv4 forwarding is disabled. Networking will not work")
 	}
@@ -594,12 +596,12 @@ func (daemon *Daemon) initNetworkController(config *Config) (libnetwork.NetworkC
 	}
 
 	// Initialize default network on "null"
-	if _, err := controller.NewNetwork("null", "none", libnetwork.NetworkOptionPersist(false)); err != nil {
+	if _, err := controller.NewNetwork("null", "none", "", libnetwork.NetworkOptionPersist(false)); err != nil {
 		return nil, fmt.Errorf("Error creating default \"null\" network: %v", err)
 	}
 
 	// Initialize default network on "host"
-	if _, err := controller.NewNetwork("host", "host", libnetwork.NetworkOptionPersist(false)); err != nil {
+	if _, err := controller.NewNetwork("host", "host", "", libnetwork.NetworkOptionPersist(false)); err != nil {
 		return nil, fmt.Errorf("Error creating default \"host\" network: %v", err)
 	}
 
@@ -656,7 +658,7 @@ func initBridgeDriver(controller libnetwork.NetworkController, config *Config) e
 
 	ipamV4Conf = &libnetwork.IpamConf{AuxAddresses: make(map[string]string)}
 
-	nw, nw6List, err := ipamutils.ElectInterfaceAddresses(bridgeName)
+	nw, nw6List, err := netutils.ElectInterfaceAddresses(bridgeName)
 	if err == nil {
 		ipamV4Conf.PreferredPool = lntypes.GetIPNetCanonical(nw).String()
 		hip, _ := lntypes.GetHostPartIP(nw.IP, nw.Mask)
@@ -734,7 +736,7 @@ func initBridgeDriver(controller libnetwork.NetworkController, config *Config) e
 		v6Conf = append(v6Conf, ipamV6Conf)
 	}
 	// Initialize default network on "bridge" with the same name
-	_, err = controller.NewNetwork("bridge", "bridge",
+	_, err = controller.NewNetwork("bridge", "bridge", "",
 		libnetwork.NetworkOptionEnableIPv6(config.bridgeConfig.EnableIPv6),
 		libnetwork.NetworkOptionDriverOpts(netOption),
 		libnetwork.NetworkOptionIpam("default", "", v4Conf, v6Conf, nil),
@@ -977,7 +979,6 @@ func (daemon *Daemon) registerLinks(container *container.Container, hostConfig *
 		}
 		child, err := daemon.GetContainer(name)
 		if err != nil {
-			//An error from daemon.GetContainer() means this name could not be found
 			return fmt.Errorf("Could not get container for %s", name)
 		}
 		for child.HostConfig.NetworkMode.IsContainer() {

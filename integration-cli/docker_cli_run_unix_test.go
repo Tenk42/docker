@@ -396,6 +396,55 @@ func (s *DockerSuite) TestRunAttachDetachKeysOverrideConfig(c *check.C) {
 	c.Assert(running, checker.Equals, "true", check.Commentf("expected container to still be running"))
 }
 
+func (s *DockerSuite) TestRunAttachInvalidDetachKeySequencePreserved(c *check.C) {
+	name := "attach-detach"
+	keyA := []byte{97}
+	keyB := []byte{98}
+
+	dockerCmd(c, "run", "--name", name, "-itd", "busybox", "cat")
+
+	cmd := exec.Command(dockerBinary, "attach", "--detach-keys='a,b,c'", name)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		c.Fatal(err)
+	}
+	cpty, tty, err := pty.Open()
+	if err != nil {
+		c.Fatal(err)
+	}
+	defer cpty.Close()
+	cmd.Stdin = tty
+	if err := cmd.Start(); err != nil {
+		c.Fatal(err)
+	}
+	c.Assert(waitRun(name), check.IsNil)
+
+	// Invalid escape sequence aba, should print aba in output
+	if _, err := cpty.Write(keyA); err != nil {
+		c.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := cpty.Write(keyB); err != nil {
+		c.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := cpty.Write(keyA); err != nil {
+		c.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := cpty.Write([]byte("\n")); err != nil {
+		c.Fatal(err)
+	}
+
+	out, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		c.Fatal(err)
+	}
+	if strings.TrimSpace(out) != "aba" {
+		c.Fatalf("expected 'aba', got %q", out)
+	}
+}
+
 // "test" should be printed
 func (s *DockerSuite) TestRunWithCPUQuota(c *check.C) {
 	testRequires(c, cpuCfsQuota)
@@ -554,7 +603,7 @@ func (s *DockerSuite) TestRunWithInvalidPathforBlkioDeviceWriteIOps(c *check.C) 
 }
 
 func (s *DockerSuite) TestRunOOMExitCode(c *check.C) {
-	testRequires(c, oomControl)
+	testRequires(c, memoryLimitSupport, swapMemorySupport)
 	errChan := make(chan error)
 	go func() {
 		defer close(errChan)
@@ -948,10 +997,10 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	testRequires(c, SameHostDaemon, seccompEnabled, NotUserNamespace)
 
 	var group sync.WaitGroup
-	group.Add(4)
-	errChan := make(chan error, 4)
+	group.Add(11)
+	errChan := make(chan error, 11)
 	go func() {
-		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "syscall-test", "acct-test")
+		out, _, err := dockerCmdWithError("run", "syscall-test", "acct-test")
 		if err == nil || !strings.Contains(out, "Operation not permitted") {
 			errChan <- fmt.Errorf("expected Operation not permitted, got: %s", out)
 		}
@@ -959,9 +1008,65 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	}()
 
 	go func() {
-		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "syscall-test", "ns-test", "echo", "hello")
+		out, _, err := dockerCmdWithError("run", "--cap-add", "sys_admin", "syscall-test", "acct-test")
 		if err == nil || !strings.Contains(out, "Operation not permitted") {
 			errChan <- fmt.Errorf("expected Operation not permitted, got: %s", out)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-add", "sys_pacct", "syscall-test", "acct-test")
+		if err == nil || !strings.Contains(out, "No such file or directory") {
+			errChan <- fmt.Errorf("expected No such file or directory, got: %s", out)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "syscall-test", "acct-test")
+		if err == nil || !strings.Contains(out, "No such file or directory") {
+			errChan <- fmt.Errorf("expected No such file or directory, got: %s", out)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-drop", "ALL", "--cap-add", "sys_pacct", "syscall-test", "acct-test")
+		if err == nil || !strings.Contains(out, "No such file or directory") {
+			errChan <- fmt.Errorf("expected No such file or directory, got: %s", out)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "syscall-test", "ns-test", "echo", "hello0")
+		if err == nil || !strings.Contains(out, "Operation not permitted") {
+			errChan <- fmt.Errorf("expected Operation not permitted, got: %s", out)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-add", "sys_admin", "syscall-test", "ns-test", "echo", "hello1")
+		if err != nil || !strings.Contains(out, "hello1") {
+			errChan <- fmt.Errorf("expected hello1, got: %s, %v", out, err)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-drop", "all", "--cap-add", "sys_admin", "syscall-test", "ns-test", "echo", "hello2")
+		if err != nil || !strings.Contains(out, "hello2") {
+			errChan <- fmt.Errorf("expected hello2, got: %s, %v", out, err)
+		}
+		group.Done()
+	}()
+
+	go func() {
+		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "syscall-test", "ns-test", "echo", "hello3")
+		if err != nil || !strings.Contains(out, "hello3") {
+			errChan <- fmt.Errorf("expected hello3, got: %s, %v", out, err)
 		}
 		group.Done()
 	}()
@@ -975,9 +1080,9 @@ func (s *DockerSuite) TestRunSeccompDefaultProfile(c *check.C) {
 	}()
 
 	go func() {
-		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp=unconfined", "syscall-test", "ns-test", "echo", "hello")
-		if err != nil || !strings.Contains(out, "hello") {
-			errChan <- fmt.Errorf("expected hello, got: %s, %v", out, err)
+		out, _, err := dockerCmdWithError("run", "--cap-add", "ALL", "--security-opt", "seccomp=unconfined", "syscall-test", "ns-test", "echo", "hello4")
+		if err != nil || !strings.Contains(out, "hello4") {
+			errChan <- fmt.Errorf("expected hello4, got: %s, %v", out, err)
 		}
 		group.Done()
 	}()
@@ -1020,7 +1125,7 @@ func (s *DockerSuite) TestRunApparmorProcDirectory(c *check.C) {
 // make sure the default profile can be successfully parsed (using unshare as it is
 // something which we know is blocked in the default profile)
 func (s *DockerSuite) TestRunSeccompWithDefaultProfile(c *check.C) {
-	testRequires(c, SameHostDaemon, seccompEnabled)
+	testRequires(c, SameHostDaemon, seccompEnabled, NotArm, NotPpc64le)
 
 	out, _, err := dockerCmdWithError("run", "--security-opt", "seccomp=../profiles/seccomp/default.json", "debian:jessie", "unshare", "--map-root-user", "--user", "sh", "-c", "whoami")
 	c.Assert(err, checker.NotNil, check.Commentf(out))

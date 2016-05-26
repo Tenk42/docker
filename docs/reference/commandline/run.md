@@ -246,12 +246,12 @@ system's interfaces.
 This sets simple (non-array) environmental variables in the container. For
 illustration all three
 flags are shown here. Where `-e`, `--env` take an environment variable and
-value, or if no `=` is provided, then that variable's current value is passed
-through (i.e. `$MYVAR1` from the host is set to `$MYVAR1` in the container).
-When no `=` is provided and that variable is not defined in the client's
-environment then that variable will be removed from the container's list of
-environment variables.
-All three flags, `-e`, `--env` and `--env-file` can be repeated.
+value, or if no `=` is provided, then that variable's current value, set via
+`export`, is passed through (i.e. `$MYVAR1` from the host is set to `$MYVAR1`
+in the container). When no `=` is provided and that variable is not defined
+in the client's environment then that variable will be removed from the
+container's list of environment variables. All three flags, `-e`, `--env` and
+`--env-file` can be repeated.
 
 Regardless of the order of these three flags, the `--env-file` are processed
 first, and then `-e`, `--env` flags. This way, the `-e` or `--env` will
@@ -618,14 +618,16 @@ On Microsoft Windows, can take any of these values:
 | `process` | Namespace isolation only.                                                                                                                                     |
 | `hyperv`   | Hyper-V hypervisor partition-based isolation.                                                                                                                  |
 
-In practice, when running on Microsoft Windows without a `daemon` option set,  these two commands are equivalent:
-
+On Windows, the default isolation for client is `hyperv`, and for server is
+`process`. Therefore when running on Windows server without a `daemon` option 
+set, these two commands are equivalent:
 ```
 $ docker run -d --isolation default busybox top
 $ docker run -d --isolation process busybox top
 ```
 
-If you have set the `--exec-opt isolation=hyperv` option on the Docker `daemon`, any of these commands also result in `hyperv` isolation:
+If you have set the `--exec-opt isolation=hyperv` option on the Docker `daemon`, 
+if running on Windows server, any of these commands also result in `hyperv` isolation:
 
 ```
 $ docker run -d --isolation default busybox top

@@ -59,7 +59,7 @@ docker-run - Run a command in a new container
 [**--oom-score-adj**[=*0*]]
 [**-P**|**--publish-all**]
 [**-p**|**--publish**[=*[]*]]
-[**--pid**[=*[]*]]
+[**--pid**[=*[PID]*]]
 [**--userns**[=*[]*]]
 [**--pids-limit**[=*PIDS_LIMIT*]]
 [**--privileged**]
@@ -103,7 +103,7 @@ pull** IMAGE, before it starts the container from that image.
 
    In foreground mode (the default when **-d**
 is not specified), **docker run** can start the process in the container
-and attach the console to the process’s standard input, output, and standard
+and attach the console to the process's standard input, output, and standard
 error. It can even pretend to be a TTY (this is what most commandline
 executables expect) and pass along signals. The **-a** option can be set for
 each of stdin, stdout, and stderr.
@@ -297,7 +297,9 @@ redirection on the host system.
                                'host': use the host shared memory,semaphores and message queues inside the container.  Note: the host mode gives the container full access to local shared memory and is therefore considered insecure.
 
 **--isolation**="*default*"
-   Isolation specifies the type of isolation technology used by containers.
+   Isolation specifies the type of isolation technology used by containers. Note
+that the default on Windows server is `process`, and the default on Windows client
+is `hyperv`. Linux only supports `default`.
 
 **-l**, **--label**=[]
    Set metadata on the container (e.g., --label com.example.key=value)
@@ -353,7 +355,8 @@ as memory limit.
 **--memory-swap**="LIMIT"
    A limit value equal to memory plus swap. Must be used with the  **-m**
 (**--memory**) flag. The swap `LIMIT` should always be larger than **-m**
-(**--memory**) value.
+(**--memory**) value.  By default, the swap `LIMIT` will be set to double
+the value of --memory.
 
    The format of `LIMIT` is `<number>[<unit>]`. Unit can be `b` (bytes),
 `k` (kilobytes), `m` (megabytes), or `g` (gigabytes). If you don't specify a
@@ -419,10 +422,11 @@ but not `docker run -p 1230-1236:1230-1240 --name RangeContainerPortsBiggerThanR
 With ip: `docker run -p 127.0.0.1:$HOSTPORT:$CONTAINERPORT --name CONTAINER -t someimage`
 Use `docker port` to see the actual mapping: `docker port CONTAINER $CONTAINERPORT`
 
-**--pid**=*host*
+**--pid**=""
    Set the PID mode for the container
-     **host**: use the host's PID namespace inside the container.
-     Note: the host mode gives the container full access to local PID and is therefore considered insecure.
+   Default is to create a private PID namespace for the container
+                               'container:<name|id>': join another container's PID namespace
+                               'host': use the host's PID namespace for the container. Note: the host mode gives the container full access to local PID and is therefore considered insecure.
 
 **--userns**=""
    Set the usernamespace mode for the container when `userns-remap` option is enabled.
@@ -484,7 +488,8 @@ its root filesystem mounted as read only prohibiting any writes.
    $ docker run -it --storage-opt size=120G fedora /bin/bash
 
    This (size) will allow to set the container rootfs size to 120G at creation time. User cannot pass a size less than the Default BaseFS Size.
-  
+   This option is only available for the `devicemapper`, `btrfs` and `zfs` graphrivers.
+
 **--stop-signal**=*SIGTERM*
   Signal to stop a container. Default is SIGTERM.
 
@@ -732,7 +737,7 @@ This should list the message sent to logger.
 
 If you do not specify -a then Docker will attach everything (stdin,stdout,stderr)
 . You can specify to which of the three standard streams (stdin, stdout, stderr)
-you’d like to connect instead, as in:
+you'd like to connect instead, as in:
 
     # docker run -a stdin -a stdout -i -t fedora /bin/bash
 
@@ -846,7 +851,7 @@ If a container is connected to the default bridge network and `linked`
 with other containers, then the container's `/etc/hosts` file is updated
 with the linked container's name.
 
-> **Note** Since Docker may live update the container’s `/etc/hosts` file, there
+> **Note** Since Docker may live update the container's `/etc/hosts` file, there
 may be situations when processes inside the container can end up reading an
 empty or incomplete `/etc/hosts` file. In most cases, retrying the read again
 should fix the problem.

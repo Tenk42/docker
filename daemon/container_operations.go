@@ -47,8 +47,14 @@ func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libn
 
 	if container.HostConfig.NetworkMode.IsHost() {
 		sboxOptions = append(sboxOptions, libnetwork.OptionUseDefaultSandbox())
-		sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
-		sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+		if len(container.HostConfig.ExtraHosts) == 0 {
+			sboxOptions = append(sboxOptions, libnetwork.OptionOriginHostsPath("/etc/hosts"))
+		}
+		if len(container.HostConfig.DNS) == 0 && len(daemon.configStore.DNS) == 0 &&
+			len(container.HostConfig.DNSSearch) == 0 && len(daemon.configStore.DNSSearch) == 0 &&
+			len(container.HostConfig.DNSOptions) == 0 && len(daemon.configStore.DNSOptions) == 0 {
+			sboxOptions = append(sboxOptions, libnetwork.OptionOriginResolvConfPath("/etc/resolv.conf"))
+		}
 	} else {
 		// OptionUseExternalKey is mandatory for userns support.
 		// But optional for non-userns support
@@ -167,7 +173,7 @@ func (daemon *Daemon) buildSandboxOptions(container *container.Container, n libn
 		libnetwork.OptionPortMapping(pbList),
 		libnetwork.OptionExposedPorts(exposeList))
 
-	// Link feature is supported only for the default bridge network.
+	// Legacy Link feature is supported only for the default bridge network.
 	// return if this call to build join options is not for default bridge network
 	if n.Name() != defaultNetName {
 		return sboxOptions, nil

@@ -33,6 +33,7 @@ import (
 	"github.com/docker/notary/client"
 	"github.com/docker/notary/passphrase"
 	"github.com/docker/notary/trustmanager"
+	"github.com/docker/notary/trustpinning"
 	"github.com/docker/notary/tuf/data"
 	"github.com/docker/notary/tuf/signed"
 	"github.com/docker/notary/tuf/store"
@@ -184,7 +185,9 @@ func (cli *DockerCli) getNotaryRepository(repoInfo *registry.RepositoryInfo, aut
 	modifiers = append(modifiers, transport.RequestModifier(auth.NewAuthorizer(challengeManager, tokenHandler, basicHandler)))
 	tr := transport.NewTransport(base, modifiers...)
 
-	return client.NewNotaryRepository(cli.trustDirectory(), repoInfo.FullName(), server, tr, cli.getPassphraseRetriever())
+	return client.NewNotaryRepository(
+		cli.trustDirectory(), repoInfo.FullName(), server, tr, cli.getPassphraseRetriever(),
+		trustpinning.TrustPinConfig{})
 }
 
 func convertTarget(t client.Target) (target, error) {
@@ -214,22 +217,6 @@ func (cli *DockerCli) getPassphraseRetriever() passphrase.Retriever {
 		"default":  os.Getenv("DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE"),
 	}
 
-	// Backwards compatibility with old env names. We should remove this in 1.10
-	if env["root"] == "" {
-		if passphrase := os.Getenv("DOCKER_CONTENT_TRUST_OFFLINE_PASSPHRASE"); passphrase != "" {
-			env["root"] = passphrase
-			fmt.Fprintf(cli.err, "[DEPRECATED] The environment variable DOCKER_CONTENT_TRUST_OFFLINE_PASSPHRASE has been deprecated and will be removed in v1.10. Please use DOCKER_CONTENT_TRUST_ROOT_PASSPHRASE\n")
-		}
-	}
-	if env["snapshot"] == "" || env["targets"] == "" || env["default"] == "" {
-		if passphrase := os.Getenv("DOCKER_CONTENT_TRUST_TAGGING_PASSPHRASE"); passphrase != "" {
-			env["snapshot"] = passphrase
-			env["targets"] = passphrase
-			env["default"] = passphrase
-			fmt.Fprintf(cli.err, "[DEPRECATED] The environment variable DOCKER_CONTENT_TRUST_TAGGING_PASSPHRASE has been deprecated and will be removed in v1.10. Please use DOCKER_CONTENT_TRUST_REPOSITORY_PASSPHRASE\n")
-		}
-	}
-
 	return func(keyName string, alias string, createNew bool, numAttempts int) (string, bool, error) {
 		if v := env[alias]; v != "" {
 			return v, numAttempts > 1, nil
@@ -242,14 +229,14 @@ func (cli *DockerCli) getPassphraseRetriever() passphrase.Retriever {
 	}
 }
 
-func (cli *DockerCli) trustedReference(ref reference.NamedTagged) (reference.Canonical, error) {
+func (cli *DockerCli) trustedReference(ctx context.Context, ref reference.NamedTagged) (reference.Canonical, error) {
 	repoInfo, err := registry.ParseRepositoryInfo(ref)
 	if err != nil {
 		return nil, err
 	}
 
 	// Resolve the Auth config relevant for this server
-	authConfig := cli.resolveAuthConfig(repoInfo.Index)
+	authConfig := cli.resolveAuthConfig(ctx, repoInfo.Index)
 
 	notaryRepo, err := cli.getNotaryRepository(repoInfo, authConfig, "pull")
 	if err != nil {
@@ -275,14 +262,14 @@ func (cli *DockerCli) trustedReference(ref reference.NamedTagged) (reference.Can
 	return reference.WithDigest(ref, r.digest)
 }
 
-func (cli *DockerCli) tagTrusted(trustedRef reference.Canonical, ref reference.NamedTagged) error {
+func (cli *DockerCli) tagTrusted(ctx context.Context, trustedRef reference.Canonical, ref reference.NamedTagged) error {
 	fmt.Fprintf(cli.out, "Tagging %s as %s\n", trustedRef.String(), ref.String())
 
 	options := types.ImageTagOptions{
 		Force: true,
 	}
 
-	return cli.client.ImageTag(context.Background(), trustedRef.String(), ref.String(), options)
+	return cli.client.ImageTag(ctx, trustedRef.String(), ref.String(), options)
 }
 
 func notaryError(repoName string, err error) error {
@@ -315,7 +302,7 @@ func notaryError(repoName string, err error) error {
 	return err
 }
 
-func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registry.Reference, authConfig types.AuthConfig, requestPrivilege types.RequestPrivilegeFunc) error {
+func (cli *DockerCli) trustedPull(ctx context.Context, repoInfo *registry.RepositoryInfo, ref registry.Reference, authConfig types.AuthConfig, requestPrivilege types.RequestPrivilegeFunc) error {
 	var refs []target
 
 	notaryRepo, err := cli.getNotaryRepository(repoInfo, authConfig, "pull")
@@ -377,7 +364,7 @@ func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registr
 		if err != nil {
 			return err
 		}
-		if err := cli.imagePullPrivileged(authConfig, ref.String(), requestPrivilege, false); err != nil {
+		if err := cli.imagePullPrivileged(ctx, authConfig, ref.String(), requestPrivilege, false); err != nil {
 			return err
 		}
 
@@ -391,7 +378,7 @@ func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registr
 			if err != nil {
 				return err
 			}
-			if err := cli.tagTrusted(trustedRef, tagged); err != nil {
+			if err := cli.tagTrusted(ctx, trustedRef, tagged); err != nil {
 				return err
 			}
 		}
@@ -399,8 +386,8 @@ func (cli *DockerCli) trustedPull(repoInfo *registry.RepositoryInfo, ref registr
 	return nil
 }
 
-func (cli *DockerCli) trustedPush(repoInfo *registry.RepositoryInfo, ref reference.Named, authConfig types.AuthConfig, requestPrivilege types.RequestPrivilegeFunc) error {
-	responseBody, err := cli.imagePushPrivileged(authConfig, ref.String(), requestPrivilege)
+func (cli *DockerCli) trustedPush(ctx context.Context, repoInfo *registry.RepositoryInfo, ref reference.Named, authConfig types.AuthConfig, requestPrivilege types.RequestPrivilegeFunc) error {
+	responseBody, err := cli.imagePushPrivileged(ctx, authConfig, ref.String(), requestPrivilege)
 	if err != nil {
 		return err
 	}
@@ -474,7 +461,7 @@ func (cli *DockerCli) trustedPush(repoInfo *registry.RepositoryInfo, ref referen
 	}
 
 	// get the latest repository metadata so we can figure out which roles to sign
-	_, err = repo.Update(false)
+	err = repo.Update(false)
 
 	switch err.(type) {
 	case client.ErrRepoNotInitialized, client.ErrRepositoryNotExist:

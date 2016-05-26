@@ -40,25 +40,23 @@ func (cli *DockerCli) CmdLogin(args ...string) error {
 		cli.in = os.Stdin
 	}
 
+	ctx := context.Background()
 	var serverAddress string
 	var isDefaultRegistry bool
 	if len(cmd.Args()) > 0 {
 		serverAddress = cmd.Arg(0)
 	} else {
-		serverAddress = cli.electAuthServer()
+		serverAddress = cli.electAuthServer(ctx)
 		isDefaultRegistry = true
 	}
-
 	authConfig, err := cli.configureAuth(*flUser, *flPassword, serverAddress, isDefaultRegistry)
 	if err != nil {
 		return err
 	}
-
-	response, err := cli.client.RegistryLogin(context.Background(), authConfig)
+	response, err := cli.client.RegistryLogin(ctx, authConfig)
 	if err != nil {
 		return err
 	}
-
 	if response.IdentityToken != "" {
 		authConfig.Password = ""
 		authConfig.IdentityToken = response.IdentityToken
@@ -87,6 +85,17 @@ func (cli *DockerCli) configureAuth(flUser, flPassword, serverAddress string, is
 		return authconfig, err
 	}
 
+	// Some links documenting this:
+	// - https://code.google.com/archive/p/mintty/issues/56
+	// - https://github.com/docker/docker/issues/15272
+	// - https://mintty.github.io/ (compatibility)
+	// Linux will hit this if you attempt `cat | docker login`, and Windows
+	// will hit this if you attempt docker login from mintty where stdin
+	// is a pipe, not a character based console.
+	if flPassword == "" && !cli.isTerminalIn {
+		return authconfig, fmt.Errorf("Error: Cannot perform an interactive logon from a non TTY device")
+	}
+
 	authconfig.Username = strings.TrimSpace(authconfig.Username)
 
 	if flUser = strings.TrimSpace(flUser); flUser == "" {
@@ -101,11 +110,9 @@ func (cli *DockerCli) configureAuth(flUser, flPassword, serverAddress string, is
 			flUser = authconfig.Username
 		}
 	}
-
 	if flUser == "" {
 		return authconfig, fmt.Errorf("Error: Non-null Username Required")
 	}
-
 	if flPassword == "" {
 		oldState, err := term.SaveState(cli.inFd)
 		if err != nil {

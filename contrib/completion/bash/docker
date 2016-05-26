@@ -606,7 +606,7 @@ _docker_docker() {
 			COMPREPLY=( $( compgen -W "$boolean_options $global_options_with_args" -- "$cur" ) )
 			;;
 		*)
-			local counter=$( __docker_pos_first_nonflag $(__docker_to_extglob "$global_options_with_args") )
+			local counter=$( __docker_pos_first_nonflag "$(__docker_to_extglob "$global_options_with_args")" )
 			if [ $cword -eq $counter ]; then
 				COMPREPLY=( $( compgen -W "${commands[*]} help" -- "$cur" ) )
 			fi
@@ -816,6 +816,8 @@ _docker_daemon() {
 		--label
 		--log-driver
 		--log-opt
+		--max-concurrent-downloads
+		--max-concurrent-uploads
 		--mtu
 		--pidfile -p
 		--registry-mirror
@@ -964,6 +966,11 @@ _docker_events() {
 			__docker_complete_containers_all
 			return
 			;;
+		daemon)
+			local name=$(__docker_q info | sed -n 's/^\(ID\|Name\): //p')
+			COMPREPLY=( $( compgen -W "$name" -- "${cur##*=}" ) )
+			return
+			;;
 		event)
 			COMPREPLY=( $( compgen -W "
 				attach
@@ -985,6 +992,7 @@ _docker_events() {
 				pause
 				pull
 				push
+				reload
 				rename
 				resize
 				restart
@@ -1010,7 +1018,7 @@ _docker_events() {
 			return
 			;;
 		type)
-			COMPREPLY=( $( compgen -W "container image network volume" -- "${cur##*=}" ) )
+			COMPREPLY=( $( compgen -W "container daemon image network volume" -- "${cur##*=}" ) )
 			return
 			;;
 		volume)
@@ -1022,7 +1030,7 @@ _docker_events() {
 
 	case "$prev" in
 		--filter|-f)
-			COMPREPLY=( $( compgen -S = -W "container event image label network type volume" -- "$cur" ) )
+			COMPREPLY=( $( compgen -S = -W "container daemon event image label network type volume" -- "$cur" ) )
 			__docker_nospace
 			return
 			;;
@@ -1096,6 +1104,11 @@ _docker_history() {
 _docker_images() {
 	local key=$(__docker_map_key_of_current_option '--filter|-f')
 	case "$key" in
+		before)
+			cur="${cur##*=}"
+			__docker_complete_images
+			return
+			;;
 		dangling)
 			COMPREPLY=( $( compgen -W "false true" -- "${cur##*=}" ) )
 			return
@@ -1103,11 +1116,16 @@ _docker_images() {
 		label)
 			return
 			;;
+		since)
+			cur="${cur##*=}"
+			__docker_complete_images
+			return
+			;;
 	esac
 
 	case "$prev" in
 		--filter|-f)
-			COMPREPLY=( $( compgen -S = -W "dangling label" -- "$cur" ) )
+			COMPREPLY=( $( compgen -S = -W "before dangling label since" -- "$cur" ) )
 			__docker_nospace
 			return
 			;;
@@ -1258,7 +1276,7 @@ _docker_logs() {
 
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--follow -f --help --since --tail --timestamps -t" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "--details --follow -f --help --since --tail --timestamps -t" -- "$cur" ) )
 			;;
 		*)
 			local counter=$(__docker_pos_first_nonflag '--tail')
@@ -1481,6 +1499,11 @@ _docker_ps() {
 			__docker_complete_images
 			return
 			;;
+		before)
+			cur="${cur##*=}"
+			__docker_complete_containers_all
+			return
+			;;
 		id)
 			cur="${cur##*=}"
 			__docker_complete_container_ids
@@ -1489,6 +1512,11 @@ _docker_ps() {
 		name)
 			cur="${cur##*=}"
 			__docker_complete_container_names
+			return
+			;;
+		since)
+			cur="${cur##*=}"
+			__docker_complete_containers_all
 			return
 			;;
 		status)
@@ -1503,11 +1531,8 @@ _docker_ps() {
 	esac
 
 	case "$prev" in
-		--before|--since)
-			__docker_complete_containers_all
-			;;
 		--filter|-f)
-			COMPREPLY=( $( compgen -S = -W "ancestor exited id label name status volume" -- "$cur" ) )
+			COMPREPLY=( $( compgen -S = -W "ancestor before exited id label name since status volume" -- "$cur" ) )
 			__docker_nospace
 			return
 			;;
@@ -1518,7 +1543,7 @@ _docker_ps() {
 
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--all -a --before --filter -f --format --help --latest -l -n --no-trunc --quiet -q --size -s --since" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "--all -a --filter -f --format --help --latest -l -n --no-trunc --quiet -q --size -s" -- "$cur" ) )
 			;;
 	esac
 }
@@ -1830,6 +1855,21 @@ _docker_run() {
 			esac
 			return
 			;;
+		--pid)
+			case "$cur" in
+				*:*)
+					cur="${cur#*:}"
+					__docker_complete_containers_running
+					;;
+				*)
+					COMPREPLY=( $( compgen -W 'host container:' -- "$cur" ) )
+					if [ "$COMPREPLY" = "container:" ]; then
+						__docker_nospace
+					fi
+					;;
+			esac
+			return
+			;;
 		--security-opt)
 			COMPREPLY=( $( compgen -W "apparmor= label= no-new-privileges seccomp=" -- "$cur") )
 			if [ "${COMPREPLY[*]}" != "no-new-privileges" ] ; then
@@ -1890,15 +1930,29 @@ _docker_save() {
 }
 
 _docker_search() {
+	local key=$(__docker_map_key_of_current_option '--filter|-f')
+	case "$key" in
+		is-automated)
+			COMPREPLY=( $( compgen -W "false true" -- "${cur##*=}" ) )
+			return
+			;;
+		is-official)
+			COMPREPLY=( $( compgen -W "false true" -- "${cur##*=}" ) )
+			return
+			;;
+	esac
+
 	case "$prev" in
-		--stars|-s)
+		--filter|-f)
+			COMPREPLY=( $( compgen -S = -W "is-automated is-official stars" -- "$cur" ) )
+			__docker_nospace
 			return
 			;;
 	esac
 
 	case "$cur" in
 		-*)
-			COMPREPLY=( $( compgen -W "--automated --help --no-trunc --stars -s" -- "$cur" ) )
+			COMPREPLY=( $( compgen -W "--filter --help --no-trunc" -- "$cur" ) )
 			;;
 	esac
 }

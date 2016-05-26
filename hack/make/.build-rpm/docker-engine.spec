@@ -60,6 +60,12 @@ Requires: device-mapper >= 1.02.90-2
 %global with_selinux 1
 %endif
 
+# DWZ problem with multiple golang binary, see bug
+# https://bugzilla.redhat.com/show_bug.cgi?id=995136#c12
+%if 0%{?fedora} >= 20 || 0%{?rhel} >= 7 || 0%{?oraclelinux} >= 7
+%global _dwz_low_mem_die_limit 0
+%endif
+
 # start if with_selinux
 %if 0%{?with_selinux}
 # Version of SELinux we were using
@@ -176,6 +182,7 @@ install -p -m 644 contrib/syntax/nano/Dockerfile.nanorc $RPM_BUILD_ROOT/usr/shar
 %files
 %doc AUTHORS CHANGELOG.md CONTRIBUTING.md LICENSE MAINTAINERS NOTICE README.md
 /%{_bindir}/docker
+/%{_bindir}/dockerd
 /%{_bindir}/docker-containerd
 /%{_bindir}/docker-containerd-shim
 /%{_bindir}/docker-containerd-ctr

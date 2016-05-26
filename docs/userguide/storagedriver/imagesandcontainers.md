@@ -42,7 +42,7 @@ image.
 
 Docker 1.10 introduced a new content addressable storage model. This is a 
 completely new way to address image and layer data on disk. Previously, image 
-and layer data was referenced and stored using a a randomly generated UUID. In 
+and layer data was referenced and stored using a randomly generated UUID. In 
 the new model this is replaced by a secure *content hash*.
 
 The new model improves security, provides a built-in way to avoid ID 
@@ -154,7 +154,7 @@ stored in this writable layer. When the container is deleted the writable layer
  is also deleted. The underlying image remains unchanged.
 
 Because each container has its own thin writable container layer, and all 
-changes are stored this container layer, this means that multiple containers 
+changes are stored in this container layer, this means that multiple containers 
 can share access to the same underlying image and yet have their own data 
 state. The diagram below shows multiple containers sharing the same Ubuntu 
 15.04 image.

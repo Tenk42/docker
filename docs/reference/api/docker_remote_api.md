@@ -116,6 +116,12 @@ This section lists each version from latest to oldest.  Each listing includes a 
 * `GET /info` now returns `SecurityOptions` field, showing if `apparmor`, `seccomp`, or `selinux` is supported.
 * `GET /networks` now supports filtering by `label` and `driver`.
 * `POST /containers/create` now takes `MaximumIOps` and `MaximumIOBps` fields. Windows daemon only.
+* `POST /containers/create` now returns a HTTP 400 "bad parameter" message
+  if no command is specified (instead of a HTTP 500 "server error")
+* `GET /images/search` now takes a `filters` query parameter.
+* `GET /events` now supports a `reload` event that is emitted when the daemon configuration is reloaded.
+* `GET /events` now supports filtering by daemon name or ID.
+* `GET /images/json` now supports filters `since` and `before`.
 
 ### v1.23 API changes
 
@@ -136,6 +142,7 @@ This section lists each version from latest to oldest.  Each listing includes a 
 * `POST /auth` now returns an `IdentityToken` when supported by a registry.
 * `POST /containers/create` with both `Hostname` and `Domainname` fields specified will result in the container's hostname being set to `Hostname`, rather than `Hostname.Domainname`.
 * `GET /volumes` now supports more filters, new added filters are `name` and `driver`.
+* `GET /containers/(id or name)/logs` now accepts a `details` query parameter to stream the extra attributes that were provided to the containers `LogOpts`, such as environment variables and labels, with the logs.
 
 ### v1.22 API changes
 
